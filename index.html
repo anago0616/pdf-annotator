@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#1a73e8">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="PDFノート">
+<title>PDFノート - 注釈・共有</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+</head>
+<body>
+
+<!-- ログイン画面 -->
+<div id="loginView" class="view" hidden>
+  <div class="login-wrap">
+    <div class="login-box">
+      <h1>📄 PDFノート</h1>
+      <p class="login-sub">PDFに書き込み・共有できるノートアプリ</p>
+      <div class="login-tabs">
+        <button id="tabLogin" class="active">ログイン</button>
+        <button id="tabRegister">新規登録</button>
+      </div>
+      <input id="loginUser" placeholder="ユーザー名" autocomplete="username" maxlength="20">
+      <input id="loginPass" type="password" placeholder="パスワード" autocomplete="current-password">
+      <button id="loginSubmit" class="login-submit">ログイン</button>
+      <p id="loginError" class="login-error"></p>
+    </div>
+  </div>
+</div>
+
+<!-- ホーム画面 -->
+<div id="homeView" class="view" hidden>
+  <header class="home-header">
+    <div class="home-header-row">
+      <h1>📄 PDFノート</h1>
+      <button id="joinBtn" class="join-btn">🔗 コードで参加</button>
+    </div>
+    <p class="subtitle">👤 <span id="userName"></span> でログイン中 ・ <a id="logoutBtn" class="logout-link">ログアウト</a></p>
+  </header>
+  <main id="docList" class="doc-list"></main>
+  <div id="emptyState" class="empty-state" hidden>
+    <div class="empty-icon">📂</div>
+    <p>PDFがまだありません</p>
+    <p class="empty-sub">右下の「＋」からPDFを追加してください</p>
+  </div>
+  <button id="addBtn" class="fab" title="PDFを追加">＋</button>
+  <input type="file" id="fileInput" accept="application/pdf,.pdf" multiple hidden>
+</div>
+
+<!-- 編集画面 -->
+<div id="editorView" class="view" hidden>
+  <header class="editor-header">
+    <button id="backBtn" class="icon-btn" title="戻る">←</button>
+    <span id="docTitle" class="doc-title"></span>
+    <span id="shareState" class="share-state" hidden></span>
+    <span id="saveStatus" class="save-status"></span>
+    <button id="liveBtn" class="icon-btn" title="共同編集">🔗</button>
+    <button id="shareBtn" class="icon-btn" title="PDFを書き出して共有">📤</button>
+  </header>
+
+  <main id="pageContainer" class="page-container"></main>
+
+  <div class="toolbar">
+    <div class="tool-row" id="optionRow">
+      <div class="color-swatches" id="colorSwatches"></div>
+      <input type="range" id="widthSlider" min="1" max="24" value="3" title="太さ">
+      <span id="widthLabel" class="width-label">3</span>
+    </div>
+    <div class="tool-row">
+      <button class="tool-btn active" data-tool="hand" title="スクロール">✋</button>
+      <button class="tool-btn" data-tool="pen" title="ペン">✏️</button>
+      <button class="tool-btn" data-tool="marker" title="マーカー">🖍️</button>
+      <button class="tool-btn" data-tool="text" title="テキスト">🅣</button>
+      <button class="tool-btn" data-tool="eraser" title="消しゴム">🧽</button>
+      <span class="spacer"></span>
+      <button id="undoBtn" class="tool-btn" title="元に戻す">↩️</button>
+      <button id="zoomOutBtn" class="tool-btn" title="縮小">－</button>
+      <button id="zoomInBtn" class="tool-btn" title="拡大">＋</button>
+    </div>
+  </div>
+
+  <!-- テキスト入力ポップアップ -->
+  <div id="textEditor" class="text-editor" hidden>
+    <textarea id="textInput" rows="3" placeholder="テキストを入力"></textarea>
+    <div class="text-editor-actions">
+      <button id="textCancelBtn">キャンセル</button>
+      <button id="textDeleteBtn" class="danger" hidden>削除</button>
+      <button id="textOkBtn" class="primary">確定</button>
+    </div>
+  </div>
+</div>
+
+<!-- 取り込みダイアログ -->
+<div id="importDialog" class="share-dialog" hidden>
+  <div class="share-dialog-box">
+    <h3>📥 PDFを取り込み</h3>
+    <p id="importInfo" class="share-desc"></p>
+    <input id="importCategory" class="dialog-input" list="categoryList" placeholder="タイトル(例: 会議資料)" maxlength="30">
+    <datalist id="categoryList"></datalist>
+    <div class="text-editor-actions">
+      <button id="importCancelBtn">キャンセル</button>
+      <button id="importOkBtn" class="primary">取り込む</button>
+    </div>
+  </div>
+</div>
+
+<!-- 共有コードダイアログ -->
+<div id="shareDialog" class="share-dialog" hidden>
+  <div class="share-dialog-box">
+    <h3>🔗 共同編集</h3>
+    <p class="share-desc">このコードを相手に伝えると、このタイトル内のすべての文書を一緒に編集できます。あとから追加したPDFも自動で共有されます</p>
+    <div id="shareCodeDisplay" class="share-code"></div>
+    <div class="text-editor-actions">
+      <button id="shareCopyBtn">コードをコピー</button>
+      <button id="shareCloseBtn" class="primary">閉じる</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+# 依存パッケージ(Renderがnpm installで再生成)
+node_modules/
+
+# ユーザーデータ・パスワードハッシュ・セッション・共有ルーム(公開リポジトリに含めない)
+data/
+
+# OS / エディタ
+.DS_Store
+Thumbs.db
+*.log
