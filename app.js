@@ -47,7 +47,7 @@ const state = {
 };
 
 const $ = (id) => document.getElementById(id);
-const views = { login: $('loginView'), home: $('homeView'), editor: $('editorView') };
+const views = { home: $('homeView'), editor: $('editorView') };
 
 function showToast(msg, ms = 2200) {
   const t = $('toast');
@@ -62,96 +62,16 @@ function pageAnn(doc, num) {
   return doc.annotations[num];
 }
 
-/* ================= 認証 ================= */
-let authToken = localStorage.getItem('pdfnote_token') || '';
-let authUser = localStorage.getItem('pdfnote_user') || '';
-
-function authHeaders() {
-  return authToken ? { 'Authorization': 'Bearer ' + authToken } : {};
-}
-
-async function checkAuth() {
-  if (!authToken) return false;
-  try {
-    const res = await fetch('/api/me', { headers: authHeaders() });
-    if (!res.ok) return false;
-    authUser = (await res.json()).username;
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function showLogin() {
-  disconnectShare();
-  views.home.hidden = true;
-  views.editor.hidden = true;
-  views.login.hidden = false;
-  $('loginError').textContent = '';
-}
-
-function setAuthMode(register) {
-  $('tabLogin').classList.toggle('active', !register);
-  $('tabRegister').classList.toggle('active', register);
-  $('loginSubmit').textContent = register ? '登録してはじめる' : 'ログイン';
-  $('loginPass').autocomplete = register ? 'new-password' : 'current-password';
-  $('loginError').textContent = '';
-}
-$('tabLogin').addEventListener('click', () => setAuthMode(false));
-$('tabRegister').addEventListener('click', () => setAuthMode(true));
-
-$('loginSubmit').addEventListener('click', async () => {
-  const register = $('tabRegister').classList.contains('active');
-  const username = $('loginUser').value.trim();
-  const password = $('loginPass').value;
-  if (!username || !password) { $('loginError').textContent = 'ユーザー名とパスワードを入力してください'; return; }
-  const btn = $('loginSubmit');
-  btn.disabled = true;
-  try {
-    const res = await fetch(register ? '/api/register' : '/api/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
-    });
-    const data = await res.json();
-    if (!res.ok) { $('loginError').textContent = data.error || 'エラーが発生しました'; return; }
-    authToken = data.token;
-    authUser = data.username;
-    localStorage.setItem('pdfnote_token', authToken);
-    localStorage.setItem('pdfnote_user', authUser);
-    $('loginPass').value = '';
-    renderHome();
-  } catch {
-    $('loginError').textContent = 'サーバーに接続できません';
-  } finally {
-    btn.disabled = false;
-  }
-});
-$('loginPass').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('loginSubmit').click(); });
-
-$('logoutBtn').addEventListener('click', async () => {
-  try { await fetch('/api/logout', { method: 'POST', headers: authHeaders() }); } catch {}
-  authToken = '';
-  authUser = '';
-  localStorage.removeItem('pdfnote_token');
-  localStorage.removeItem('pdfnote_user');
-  showLogin();
-});
-
-// 認証切れ時の共通処理
-function handleUnauthorized() {
-  showToast('ログインの有効期限が切れました');
-  authToken = '';
-  localStorage.removeItem('pdfnote_token');
-  showLogin();
+/* ================= 表示名(ログイン不要・共有の参加者表示用) ================= */
+// 共有時に相手に表示される名前。任意。未設定なら「ゲスト」。
+function getGuestName() {
+  return localStorage.getItem('pdfnote_name') || '';
 }
 
 /* ================= ホーム画面 ================= */
 async function renderHome() {
   views.editor.hidden = true;
-  views.login.hidden = true;
   views.home.hidden = false;
-  $('userName').textContent = authUser;
   const docs = (await dbAll()).sort((a, b) => b.updatedAt - a.updatedAt);
   const list = $('docList');
   list.innerHTML = '';
@@ -885,7 +805,7 @@ async function receiveSharedDoc(shareCode, remoteId) {
   if (all.some(d => d.shareCode === shareCode && d.remoteId === remoteId)) return;
   const sibling = all.find(d => d.shareCode === shareCode);
   try {
-    const res = await fetch(`/api/share/${shareCode}/docs/${encodeURIComponent(remoteId)}`, { headers: authHeaders() });
+    const res = await fetch(`/api/share/${shareCode}/docs/${encodeURIComponent(remoteId)}`);
     if (!res.ok) return;
     const data = await res.json();
     const pdfData = base64ToBuf(data.pdf);
@@ -914,7 +834,7 @@ function connectShare(doc) {
   disconnectShare();
   setShareState('接続中…');
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const sock = new WebSocket(`${proto}://${location.host}/ws?code=${doc.shareCode}&token=${encodeURIComponent(authToken)}`);
+  const sock = new WebSocket(`${proto}://${location.host}/ws?code=${doc.shareCode}&name=${encodeURIComponent(getGuestName())}`);
   ws = sock;
 
   sock.onmessage = (e) => {
@@ -960,10 +880,6 @@ function connectShare(doc) {
       showToast('この共有コードは無効になりました');
       return;
     }
-    if (e.code === 4401) {
-      handleUnauthorized();
-      return;
-    }
     if (state.doc && state.doc.shareCode) {
       setShareState('再接続中…', true);
       wsRetryTimer = setTimeout(() => connectShare(state.doc), 2500);
@@ -982,7 +898,7 @@ function disconnectShare() {
 async function uploadDocToRoom(code, doc) {
   const res = await fetch(`/api/share/${code}/docs`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       id: doc.id,
       name: doc.name,
@@ -990,7 +906,6 @@ async function uploadDocToRoom(code, doc) {
       annotations: doc.annotations
     })
   });
-  if (res.status === 401) { handleUnauthorized(); throw new Error('unauthorized'); }
   if (!res.ok) throw new Error('upload failed: ' + res.status);
   doc.shareCode = code;
   doc.remoteId = doc.id;
@@ -1012,7 +927,7 @@ async function startGroupShare(category) {
   showToast('共有を準備しています…');
   const res = await fetch('/api/share', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       name: category,
       docs: docs.map(d => ({
@@ -1023,7 +938,6 @@ async function startGroupShare(category) {
       }))
     })
   });
-  if (res.status === 401) { handleUnauthorized(); throw new Error('unauthorized'); }
   if (!res.ok) throw new Error('share failed: ' + res.status);
   const { code } = await res.json();
   for (const d of docs) {
@@ -1038,8 +952,7 @@ async function joinByCode(codeInput) {
   const code = codeInput.trim().toUpperCase();
   if (!/^[A-Z0-9]{6}$/.test(code)) { showToast('6桁の共有コードを入力してください'); return; }
   showToast('文書を取得しています…');
-  const res = await fetch('/api/share/' + code, { headers: authHeaders() });
-  if (res.status === 401) { handleUnauthorized(); return; }
+  const res = await fetch('/api/share/' + code);
   if (!res.ok) { showToast('共有コードが見つかりません'); return; }
   const data = await res.json();
   const existing = (await dbAll()).filter(d => d.shareCode === code);
@@ -1114,11 +1027,8 @@ if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.
 }
 
 /* テスト用フック */
-window.__app = { importPdf, openEditor, renderHome, state, dbAll, exportAnnotatedPdf, startGroupShare, joinByCode, checkAuth };
+window.__app = { importPdf, openEditor, renderHome, state, dbAll, exportAnnotatedPdf, startGroupShare, joinByCode };
 
 /* ================= 起動 ================= */
 setupPinchZoom();
-(async () => {
-  if (await checkAuth()) renderHome();
-  else showLogin();
-})();
+renderHome();

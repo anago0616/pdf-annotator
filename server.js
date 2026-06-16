@@ -27,41 +27,12 @@ const MIME = {
   '.md': 'text/markdown; charset=utf-8'
 };
 
-/* ---- ユーザー・セッション管理 ---- */
-const USERS_FILE = path.join(DATA_DIR, 'users.json');
-const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
-
-const users = new Map();    // username -> {username, salt, hash}
-const sessions = new Map(); // token -> {username, created}
-
-try {
-  for (const u of JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'))) users.set(u.username, u);
-} catch {}
-try {
-  for (const [t, s] of JSON.parse(fs.readFileSync(SESSIONS_FILE, 'utf8'))) sessions.set(t, s);
-} catch {}
-console.log(`${users.size} 人のユーザーを復元しました`);
-
-function saveUsers() {
-  fs.writeFile(USERS_FILE, JSON.stringify([...users.values()]), (e) => { if (e) console.error(e.message); });
-}
-function saveSessions() {
-  fs.writeFile(SESSIONS_FILE, JSON.stringify([...sessions.entries()]), (e) => { if (e) console.error(e.message); });
-}
-function hashPassword(password, salt) {
-  return crypto.scryptSync(password, salt, 64).toString('hex');
-}
-function createSession(username) {
-  const token = crypto.randomBytes(24).toString('hex');
-  sessions.set(token, { username, created: Date.now() });
-  saveSessions();
-  return token;
-}
-function getAuthUser(req, url) {
-  const h = req.headers['authorization'] || '';
-  const token = h.startsWith('Bearer ') ? h.slice(7) : (url && url.searchParams.get('token')) || '';
-  const sess = sessions.get(token);
-  return sess ? sess.username : null;
+/* ---- 表示名(ログイン不要・任意) ----
+ * 共有の参加者表示用。クライアントが name クエリを送れば使い、なければ「ゲスト」。
+ */
+function getDisplayName(url) {
+  const n = url && url.searchParams.get('name');
+  return (n && n.trim()) ? n.trim().slice(0, 20) : 'ゲスト';
 }
 
 /* ---- ルーム管理 ----
@@ -147,55 +118,9 @@ function sendJson(res, status, obj) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
-  // ---- 認証API ----
-  if (req.method === 'POST' && (url.pathname === '/api/register' || url.pathname === '/api/login')) {
-    try {
-      const body = JSON.parse((await readBody(req, 64 * 1024)).toString('utf8'));
-      const username = String(body.username || '').trim();
-      const password = String(body.password || '');
-      if (!/^[^\s]{1,20}$/.test(username)) return sendJson(res, 400, { error: 'ユーザー名は空白なし20文字以内で入力してください' });
-      if (password.length < 4) return sendJson(res, 400, { error: 'パスワードは4文字以上にしてください' });
-
-      if (url.pathname === '/api/register') {
-        if (users.has(username)) return sendJson(res, 409, { error: 'このユーザー名は使われています' });
-        const salt = crypto.randomBytes(16).toString('hex');
-        users.set(username, { username, salt, hash: hashPassword(password, salt) });
-        saveUsers();
-        console.log('ユーザー登録:', username);
-        return sendJson(res, 200, { token: createSession(username), username });
-      }
-      // ログイン
-      const user = users.get(username);
-      if (!user) return sendJson(res, 401, { error: 'ユーザー名かパスワードが違います' });
-      const calc = Buffer.from(hashPassword(password, user.salt), 'hex');
-      const stored = Buffer.from(user.hash, 'hex');
-      if (calc.length !== stored.length || !crypto.timingSafeEqual(calc, stored)) {
-        return sendJson(res, 401, { error: 'ユーザー名かパスワードが違います' });
-      }
-      return sendJson(res, 200, { token: createSession(username), username });
-    } catch (e) {
-      return sendJson(res, 400, { error: e.message });
-    }
-  }
-
-  if (req.method === 'GET' && url.pathname === '/api/me') {
-    const user = getAuthUser(req, url);
-    if (!user) return sendJson(res, 401, { error: '未ログイン' });
-    return sendJson(res, 200, { username: user });
-  }
-
-  if (req.method === 'POST' && url.pathname === '/api/logout') {
-    const h = req.headers['authorization'] || '';
-    const token = h.startsWith('Bearer ') ? h.slice(7) : '';
-    if (sessions.delete(token)) saveSessions();
-    return sendJson(res, 200, { ok: true });
-  }
-
-  // ---- 共有API(要ログイン) ----
+  // ---- 共有API(ログイン不要) ----
   // 共有ルーム作成(タイトル単位・複数文書)
   if (req.method === 'POST' && url.pathname === '/api/share') {
-    const user = getAuthUser(req, url);
-    if (!user) return sendJson(res, 401, { error: 'ログインが必要です' });
     try {
       const body = JSON.parse((await readBody(req)).toString('utf8'));
       if (!Array.isArray(body.docs) || body.docs.length === 0) return sendJson(res, 400, { error: '文書がありません' });
@@ -207,7 +132,6 @@ const server = http.createServer(async (req, res) => {
       const room = {
         code: newCode(),
         name: String(body.name || '無題'),
-        owner: user,
         docs,
         clients: new Set(),
         saveTimer: null
@@ -224,8 +148,6 @@ const server = http.createServer(async (req, res) => {
   // 共有中のタイトルへ文書を追加
   const mAdd = url.pathname.match(/^\/api\/share\/([A-Za-z0-9]{6})\/docs$/);
   if (req.method === 'POST' && mAdd) {
-    const user = getAuthUser(req, url);
-    if (!user) return sendJson(res, 401, { error: 'ログインが必要です' });
     const room = rooms.get(mAdd[1].toUpperCase());
     if (!room) return sendJson(res, 404, { error: '共有コードが見つかりません' });
     try {
@@ -244,7 +166,6 @@ const server = http.createServer(async (req, res) => {
   // 個別文書の取得(doc:add通知を受けた参加者用)
   const mDoc = url.pathname.match(/^\/api\/share\/([A-Za-z0-9]{6})\/docs\/([^/]+)$/);
   if (req.method === 'GET' && mDoc) {
-    if (!getAuthUser(req, url)) return sendJson(res, 401, { error: 'ログインが必要です' });
     const room = rooms.get(mDoc[1].toUpperCase());
     const doc = room && room.docs[decodeURIComponent(mDoc[2])];
     if (!doc) return sendJson(res, 404, { error: '文書が見つかりません' });
@@ -254,7 +175,6 @@ const server = http.createServer(async (req, res) => {
   // ルーム取得(参加: タイトル内の全文書)
   const m = url.pathname.match(/^\/api\/share\/([A-Za-z0-9]{6})$/);
   if (req.method === 'GET' && m) {
-    if (!getAuthUser(req, url)) return sendJson(res, 401, { error: 'ログインが必要です' });
     const room = rooms.get(m[1].toUpperCase());
     if (!room) return sendJson(res, 404, { error: '共有コードが見つかりません' });
     const docs = Object.entries(room.docs).map(([id, d]) => ({ id, name: d.name, pdf: d.pdf, annotations: d.annotations }));
@@ -278,8 +198,7 @@ const wss = new WebSocketServer({ server, path: '/ws' });
 
 wss.on('connection', (ws, req) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
-  const user = getAuthUser(req, url);
-  if (!user) { ws.close(4401, 'unauthorized'); return; }
+  const user = getDisplayName(url);
   const code = (url.searchParams.get('code') || '').toUpperCase();
   const room = rooms.get(code);
   if (!room) { ws.close(4404, 'room not found'); return; }
