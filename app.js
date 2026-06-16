@@ -294,7 +294,10 @@ async function renderAllPages() {
   inner.id = 'pagesInner';
   container.appendChild(inner);
   state.pages = [];
-  const dpr = window.devicePixelRatio || 1;
+  const baseDpr = window.devicePixelRatio || 1;
+  // 高解像度のまま端末の上限を超えないようにする(超えるとブラウザが内部縮小してぼやける)
+  // iOS Safari は概ね面積1677万px・1辺8192pxが上限
+  const MAX_AREA = 16777216, MAX_DIM = 8192, OVERSAMPLE = 1.15;
   const availW = container.clientWidth - 16;
 
   for (let num = 1; num <= state.pdf.numPages; num++) {
@@ -303,6 +306,12 @@ async function renderAllPages() {
     if (num === 1) state.baseScale = availW / vp1.width;
     const scale = state.baseScale * state.zoom;
     const vp = page.getViewport({ scale });
+
+    // 実効解像度: 端末DPRを基準に少しオーバーサンプルしつつ、上限を超えないよう制限
+    let dpr = baseDpr * OVERSAMPLE;
+    dpr = Math.min(dpr, Math.sqrt(MAX_AREA / (vp.width * vp.height)));
+    dpr = Math.min(dpr, MAX_DIM / vp.width, MAX_DIM / vp.height);
+    dpr = Math.max(1, dpr); // 最低でも等倍は確保
 
     const wrap = document.createElement('div');
     wrap.className = 'page-wrap';
@@ -589,7 +598,7 @@ $('widthSlider').addEventListener('input', (e) => {
 });
 
 /* ---- ズーム ---- */
-const ZOOM_MIN = 0.5, ZOOM_MAX = 5;
+const ZOOM_MIN = 0.5, ZOOM_MAX = 8;
 $('zoomInBtn').addEventListener('click', () => changeZoom(1.25));
 $('zoomOutBtn').addEventListener('click', () => changeZoom(0.8));
 
