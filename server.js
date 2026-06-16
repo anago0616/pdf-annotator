@@ -188,6 +188,16 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // 軽量メタ取得(文書名のみ。一覧画面の名前同期用・PDFは含めない)
+  const mMeta = url.pathname.match(/^\/api\/share\/([A-Za-z0-9]{6})\/meta$/);
+  if (req.method === 'GET' && mMeta) {
+    const room = rooms.get(mMeta[1].toUpperCase());
+    if (!room) return sendJson(res, 404, { error: '共有コードが見つかりません' });
+    const docs = {};
+    for (const [id, d] of Object.entries(room.docs)) docs[id] = d.name;
+    return sendJson(res, 200, { name: room.name, docs });
+  }
+
   // 個別文書の取得(doc:add通知を受けた参加者用)
   const mDoc = url.pathname.match(/^\/api\/share\/([A-Za-z0-9]{6})\/docs\/([^/]+)$/);
   if (req.method === 'GET' && mDoc) {

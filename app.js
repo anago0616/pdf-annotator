@@ -148,13 +148,13 @@ async function renderHome() {
         if (name && name.trim()) {
           d.name = name.trim();
           await dbPut(d);
-          // 共有中なら相手にも名前変更を反映
+          // 共有中なら相手にも名前変更を反映(ルームが消えていれば作り直して確実に残す)
           if (d.shareCode && d.remoteId) {
             fetch(`/api/share/${d.shareCode}/docs/${encodeURIComponent(d.remoteId)}/rename`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ name: d.name })
-            }).catch(() => {});
+            }).then(res => { if (res.status === 404) recreateRoom(d); }).catch(() => {});
           }
           renderHome();
         }
@@ -177,6 +177,29 @@ async function renderHome() {
       list.appendChild(card);
     }
   }
+  syncSharedNames(); // 共有中の文書名をサーバーから取得して反映(一覧画面でも最新に)
+}
+
+// 共有中の各タイトルの最新の文書名をサーバーから取得してローカルに反映
+let lastNameSync = 0;
+async function syncSharedNames() {
+  if (Date.now() - lastNameSync < 2500) return; // 連続呼び出しを抑制
+  lastNameSync = Date.now();
+  const docs = await dbAll();
+  const codes = [...new Set(docs.filter(d => d.shareCode && d.remoteId).map(d => d.shareCode))];
+  let changed = false;
+  for (const code of codes) {
+    try {
+      const res = await fetch(`/api/share/${code}/meta`);
+      if (!res.ok) continue;
+      const meta = await res.json();
+      for (const d of docs.filter(x => x.shareCode === code && x.remoteId)) {
+        const sName = meta.docs[d.remoteId];
+        if (sName && sName !== d.name) { d.name = sName; await dbPut(d); changed = true; }
+      }
+    } catch {}
+  }
+  if (changed && !views.home.hidden) renderHome();
 }
 
 async function importPdf(name, arrayBuffer, category = '未分類') {
@@ -1107,3 +1130,5 @@ window.__app = { importPdf, openEditor, renderHome, state, dbAll, exportAnnotate
 /* ================= 起動 ================= */
 setupPinchZoom();
 renderHome();
+// ホーム表示中は定期的に共有中の文書名を取得して最新に保つ
+setInterval(() => { if (!views.home.hidden) syncSharedNames(); }, 6000);
