@@ -119,7 +119,8 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
   // ---- 共有API(ログイン不要) ----
-  // 共有ルーム作成(タイトル単位・複数文書)
+  // 共有ルーム作成/復元(タイトル単位・複数文書)
+  // body.code を指定すると、そのコードでルームを作成または復元する(無料プラン再起動でルームが消えた時の自己修復用)
   if (req.method === 'POST' && url.pathname === '/api/share') {
     try {
       const body = JSON.parse((await readBody(req)).toString('utf8'));
@@ -129,17 +130,21 @@ const server = http.createServer(async (req, res) => {
         if (!d.id || typeof d.pdf !== 'string') return sendJson(res, 400, { error: '文書データが不正です' });
         docs[d.id] = { name: String(d.name || '無題'), pdf: d.pdf, annotations: d.annotations || {} };
       }
-      const room = {
-        code: newCode(),
-        name: String(body.name || '無題'),
-        docs,
-        clients: new Set(),
-        saveTimer: null
-      };
-      rooms.set(room.code, room);
+      const wantCode = (typeof body.code === 'string' && /^[A-Za-z0-9]{6}$/.test(body.code)) ? body.code.toUpperCase() : null;
+      let room = wantCode ? rooms.get(wantCode) : null;
+      if (room) {
+        // 既存ルームへ統合(まだ無い文書だけ追加。既存文書の注釈は維持)
+        for (const [id, d] of Object.entries(docs)) if (!room.docs[id]) room.docs[id] = d;
+        persistRoom(room);
+        console.log('ルーム統合:', room.code);
+        return sendJson(res, 200, { code: room.code });
+      }
+      const code = wantCode || newCode();
+      room = { code, name: String(body.name || '無題'), docs, clients: new Set(), saveTimer: null };
+      rooms.set(code, room);
       persistRoom(room);
-      console.log('ルーム作成:', room.code, room.name, `(${body.docs.length}文書)`);
-      return sendJson(res, 200, { code: room.code });
+      console.log((wantCode ? 'ルーム復元:' : 'ルーム作成:'), code, room.name, `(${body.docs.length}文書)`);
+      return sendJson(res, 200, { code });
     } catch (e) {
       return sendJson(res, 400, { error: e.message });
     }

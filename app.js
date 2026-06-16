@@ -738,6 +738,7 @@ $('shareBtn').addEventListener('click', async () => {
 /* ================= リアルタイム共同編集 ================= */
 let ws = null;
 let wsRetryTimer = null;
+let recreateAttempts = 0; // ルーム自己修復の試行回数(init成功でリセット)
 
 function bufToBase64(buf) {
   const bytes = new Uint8Array(buf);
@@ -859,6 +860,7 @@ function connectShare(doc) {
           await dbPut(s);
         }
       })();
+      recreateAttempts = 0; // 接続成功 → 復元カウンタをリセット
       setShareState(`● 共有中 ${msg.members}人`, false, msg.names);
     } else if (msg.type === 'ack') {
       pendingOps = pendingOps.filter(p => p.seq !== msg.seq);
@@ -876,8 +878,17 @@ function connectShare(doc) {
     if (ws !== sock) return; // 意図的な切断
     ws = null;
     if (e.code === 4404) {
-      setShareState('共有終了', true);
-      showToast('この共有コードは無効になりました');
+      // サーバーからルームが消えている(無料プランの再起動等)→ 手元のデータから自動復元
+      if (recreateAttempts < 3 && state.doc && state.doc.shareCode) {
+        recreateAttempts++;
+        setShareState('共有を復元中…', true);
+        recreateRoom(state.doc).then(ok => {
+          if (ok && state.doc && state.doc.shareCode) connectShare(state.doc);
+          else { setShareState('共有エラー', true); showToast('共有の復元に失敗しました'); }
+        });
+      } else {
+        setShareState('共有エラー', true);
+      }
       return;
     }
     if (state.doc && state.doc.shareCode) {
@@ -888,13 +899,39 @@ function connectShare(doc) {
   sock.onerror = () => sock.close();
 }
 
+// 消えたルームを手元の文書から同じコードで再作成(自己修復)
+async function recreateRoom(doc) {
+  try {
+    const docs = (await dbAll()).filter(d => d.shareCode === doc.shareCode);
+    if (!docs.length) return false;
+    const res = await fetch('/api/share', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code: doc.shareCode,
+        name: doc.category || '共有',
+        docs: docs.map(d => ({
+          id: d.remoteId || d.id,
+          name: d.name,
+          pdf: bufToBase64(d.pdfData),
+          annotations: d.annotations
+        }))
+      })
+    });
+    return res.ok;
+  } catch (err) {
+    console.error('共有の復元に失敗:', err);
+    return false;
+  }
+}
+
 function disconnectShare() {
   clearTimeout(wsRetryTimer);
   if (ws) { const s = ws; ws = null; s.close(); }
   setShareState(null);
 }
 
-// 共有中のタイトルへ1文書をアップロード
+// 共有中のタイトルへ1文書を追加(ルームが消えていれば自動復元される)
 async function uploadDocToRoom(code, doc) {
   const res = await fetch(`/api/share/${code}/docs`, {
     method: 'POST',
@@ -906,7 +943,13 @@ async function uploadDocToRoom(code, doc) {
       annotations: doc.annotations
     })
   });
-  if (!res.ok) throw new Error('upload failed: ' + res.status);
+  if (res.status === 404) {
+    // ルームが消えている → タイトル全体を同じコードで作り直し
+    doc.shareCode = code; doc.remoteId = doc.id; await dbPut(doc);
+    await recreateRoom(doc);
+  } else if (!res.ok) {
+    throw new Error('upload failed: ' + res.status);
+  }
   doc.shareCode = code;
   doc.remoteId = doc.id;
   await dbPut(doc);
@@ -917,7 +960,7 @@ async function startGroupShare(category) {
   const docs = (await dbAll()).filter(d => (d.category || '未分類') === category);
   if (!docs.length) throw new Error('文書がありません');
 
-  // すでに共有中なら、未共有の文書だけ追加アップロードして既存コードを返す
+  // すでに共有中なら、未共有の文書だけ追加(ルームが消えていれば復元される)
   const shared = docs.find(d => d.shareCode);
   if (shared) {
     for (const d of docs.filter(x => !x.shareCode)) await uploadDocToRoom(shared.shareCode, d);
