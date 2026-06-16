@@ -148,6 +148,14 @@ async function renderHome() {
         if (name && name.trim()) {
           d.name = name.trim();
           await dbPut(d);
+          // 共有中なら相手にも名前変更を反映
+          if (d.shareCode && d.remoteId) {
+            fetch(`/api/share/${d.shareCode}/docs/${encodeURIComponent(d.remoteId)}/rename`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name: d.name })
+            }).catch(() => {});
+          }
           renderHome();
         }
       });
@@ -831,6 +839,19 @@ async function receiveSharedDoc(shareCode, remoteId) {
   }
 }
 
+// doc:rename通知: 共有相手が変更した文書名をローカルに反映
+async function renameLocalDoc(shareCode, remoteId, name) {
+  const d = (await dbAll()).find(x => x.shareCode === shareCode && x.remoteId === remoteId);
+  if (!d || d.name === name) return;
+  d.name = name;
+  await dbPut(d);
+  if (state.doc && state.doc.id === d.id) {
+    state.doc.name = name;
+    $('docTitle').textContent = name;
+  }
+  if (!views.home.hidden) renderHome();
+}
+
 function connectShare(doc) {
   disconnectShare();
   setShareState('接続中…');
@@ -852,14 +873,23 @@ function connectShare(doc) {
       }
       state.pages.forEach(redrawOverlay);
       scheduleSave();
-      // 同タイトルの他文書の注釈もローカルに反映
+      // 同タイトルの他文書の注釈・名前もローカルに反映
+      const dn = msg.docNames || {};
       (async () => {
-        const siblings = (await dbAll()).filter(d => d.shareCode === doc.shareCode && d.id !== doc.id && d.remoteId && all[d.remoteId]);
+        const all2 = await dbAll();
+        const siblings = all2.filter(d => d.shareCode === doc.shareCode && d.id !== doc.id && d.remoteId && all[d.remoteId]);
         for (const s of siblings) {
           s.annotations = all[s.remoteId];
+          if (dn[s.remoteId]) s.name = dn[s.remoteId];
           await dbPut(s);
         }
       })();
+      // 開いている文書の名前もサーバーに合わせる
+      if (dn[state.doc.remoteId] && dn[state.doc.remoteId] !== state.doc.name) {
+        state.doc.name = dn[state.doc.remoteId];
+        $('docTitle').textContent = state.doc.name;
+        dbPut(state.doc);
+      }
       recreateAttempts = 0; // 接続成功 → 復元カウンタをリセット
       setShareState(`● 共有中 ${msg.members}人`, false, msg.names);
     } else if (msg.type === 'ack') {
@@ -871,6 +901,8 @@ function connectShare(doc) {
       else applyOpToDb(doc.shareCode, msg.docId, msg.page, msg.op);
     } else if (msg.type === 'doc:add') {
       receiveSharedDoc(doc.shareCode, msg.docId);
+    } else if (msg.type === 'doc:rename') {
+      renameLocalDoc(doc.shareCode, msg.docId, msg.name);
     }
   };
 

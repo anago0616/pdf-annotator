@@ -168,6 +168,26 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // 文書名の変更(共有相手にも反映)
+  const mRename = url.pathname.match(/^\/api\/share\/([A-Za-z0-9]{6})\/docs\/([^/]+)\/rename$/);
+  if (req.method === 'POST' && mRename) {
+    const room = rooms.get(mRename[1].toUpperCase());
+    if (!room) return sendJson(res, 404, { error: '共有コードが見つかりません' });
+    const docId = decodeURIComponent(mRename[2]);
+    if (!room.docs[docId]) return sendJson(res, 404, { error: '文書が見つかりません' });
+    try {
+      const body = JSON.parse((await readBody(req)).toString('utf8'));
+      const name = String(body.name || '').trim() || '無題';
+      room.docs[docId].name = name;
+      persistRoom(room);
+      broadcast(room, { type: 'doc:rename', docId, name });
+      console.log('文書名変更:', room.code, docId, '→', name);
+      return sendJson(res, 200, { ok: true });
+    } catch (e) {
+      return sendJson(res, 400, { error: e.message });
+    }
+  }
+
   // 個別文書の取得(doc:add通知を受けた参加者用)
   const mDoc = url.pathname.match(/^\/api\/share\/([A-Za-z0-9]{6})\/docs\/([^/]+)$/);
   if (req.method === 'GET' && mDoc) {
@@ -212,8 +232,9 @@ wss.on('connection', (ws, req) => {
   room.clients.add(ws);
   const names = () => [...room.clients].map(c => c.username);
   const allAnnotations = {};
-  for (const [id, d] of Object.entries(room.docs)) allAnnotations[id] = d.annotations;
-  ws.send(JSON.stringify({ type: 'init', annotations: allAnnotations, members: room.clients.size, names: names() }));
+  const docNames = {};
+  for (const [id, d] of Object.entries(room.docs)) { allAnnotations[id] = d.annotations; docNames[id] = d.name; }
+  ws.send(JSON.stringify({ type: 'init', annotations: allAnnotations, docNames, members: room.clients.size, names: names() }));
   broadcast(room, { type: 'members', count: room.clients.size, names: names() }, ws);
   console.log(`参加: ${code} ${user} (${room.clients.size}人)`);
 
