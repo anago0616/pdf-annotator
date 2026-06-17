@@ -96,6 +96,12 @@ html, body {
 }
 .join-btn:active { background: rgba(255,255,255,.35); }
 .subtitle { margin: 6px 0 0; font-size: 13px; opacity: .9; }
+.home-sync-state {
+  display: inline-block; margin-left: 6px; padding: 2px 9px;
+  background: rgba(255,255,255,.25); border-radius: 11px;
+  font-size: 12px; cursor: pointer; white-space: nowrap;
+}
+.home-sync-state.offline { background: rgba(255,180,60,.35); }
 
 .doc-list { flex: 1; overflow-y: auto; padding: 14px 14px 100px; }
 

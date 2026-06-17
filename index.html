@@ -58,9 +58,9 @@
   <header class="home-header">
     <div class="home-header-row">
       <h1>📄 PDFノート</h1>
-      <button id="joinBtn" class="join-btn">🔗 コードで参加</button>
+      <button id="syncBtn" class="join-btn">📲 端末を同期</button>
     </div>
-    <p class="subtitle">PDFに書き込み・共有できるノートアプリ</p>
+    <p class="subtitle">PDFに書き込み・共有できるノートアプリ <span id="homeSyncState" class="home-sync-state" hidden></span></p>
   </header>
   <main id="docList" class="doc-list"></main>
   <div id="emptyState" class="empty-state" hidden>
@@ -129,15 +129,29 @@
   </div>
 </div>
 
-<!-- 共有コードダイアログ -->
-<div id="shareDialog" class="share-dialog" hidden>
+<!-- 端末同期ダイアログ -->
+<div id="syncDialog" class="share-dialog" hidden>
   <div class="share-dialog-box">
-    <h3>🔗 共同編集</h3>
-    <p class="share-desc">このコードを相手に伝えると、このタイトル内のすべての文書を一緒に編集できます。あとから追加したPDFも自動で共有されます</p>
-    <div id="shareCodeDisplay" class="share-code"></div>
-    <div class="text-editor-actions">
-      <button id="shareCopyBtn">コードをコピー</button>
-      <button id="shareCloseBtn" class="primary">閉じる</button>
+    <h3>📲 端末間で同期</h3>
+    <!-- 同期オフ -->
+    <div id="syncOffView">
+      <p class="share-desc">このアプリのPDF・書き込み・追加・削除を、PCとスマホなど複数の端末でまるごとリアルタイム同期します。</p>
+      <div class="text-editor-actions" style="flex-direction:column; gap:8px;">
+        <button id="syncStartBtn" class="primary" style="width:100%;">この端末で同期を開始</button>
+        <button id="syncJoinBtn" style="width:100%;">他の端末のコードで参加</button>
+      </div>
+    </div>
+    <!-- 同期オン -->
+    <div id="syncOnView" hidden>
+      <p class="share-desc">他の端末でこのコードを「📲 端末を同期 → コードで参加」に入力すると、同じライブラリが同期されます。</p>
+      <div id="syncCodeDisplay" class="share-code"></div>
+      <div class="text-editor-actions">
+        <button id="syncCopyBtn">コードをコピー</button>
+        <button id="syncStopBtn" class="danger">同期を解除</button>
+      </div>
+    </div>
+    <div class="text-editor-actions" style="margin-top:10px;">
+      <button id="syncCloseBtn" class="primary">閉じる</button>
     </div>
   </div>
 </div>

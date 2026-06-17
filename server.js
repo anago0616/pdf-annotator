@@ -128,7 +128,7 @@ const server = http.createServer(async (req, res) => {
       const docs = {};
       for (const d of body.docs) {
         if (!d.id || typeof d.pdf !== 'string') return sendJson(res, 400, { error: '文書データが不正です' });
-        docs[d.id] = { name: String(d.name || '無題'), pdf: d.pdf, annotations: d.annotations || {} };
+        docs[d.id] = { name: String(d.name || '無題'), category: String(d.category || '未分類'), pdf: d.pdf, annotations: d.annotations || {} };
       }
       const wantCode = (typeof body.code === 'string' && /^[A-Za-z0-9]{6}$/.test(body.code)) ? body.code.toUpperCase() : null;
       let room = wantCode ? rooms.get(wantCode) : null;
@@ -160,7 +160,7 @@ const server = http.createServer(async (req, res) => {
     try {
       const d = JSON.parse((await readBody(req)).toString('utf8'));
       if (!d.id || typeof d.pdf !== 'string') return sendJson(res, 400, { error: '文書データが不正です' });
-      room.docs[d.id] = { name: String(d.name || '無題'), pdf: d.pdf, annotations: d.annotations || {} };
+      room.docs[d.id] = { name: String(d.name || '無題'), category: String(d.category || '未分類'), pdf: d.pdf, annotations: d.annotations || {} };
       persistRoom(room);
       broadcast(room, { type: 'doc:add', docId: d.id, name: room.docs[d.id].name });
       console.log('文書追加:', room.code, d.name);
@@ -221,15 +221,15 @@ const server = http.createServer(async (req, res) => {
     const room = rooms.get(mDoc[1].toUpperCase());
     const doc = room && room.docs[decodeURIComponent(mDoc[2])];
     if (!doc) return sendJson(res, 404, { error: '文書が見つかりません' });
-    return sendJson(res, 200, { id: decodeURIComponent(mDoc[2]), name: doc.name, pdf: doc.pdf, annotations: doc.annotations });
+    return sendJson(res, 200, { id: decodeURIComponent(mDoc[2]), name: doc.name, category: doc.category || '未分類', pdf: doc.pdf, annotations: doc.annotations });
   }
 
-  // ルーム取得(参加: タイトル内の全文書)
+  // ルーム取得(参加: 全文書)
   const m = url.pathname.match(/^\/api\/share\/([A-Za-z0-9]{6})$/);
   if (req.method === 'GET' && m) {
     const room = rooms.get(m[1].toUpperCase());
     if (!room) return sendJson(res, 404, { error: '共有コードが見つかりません' });
-    const docs = Object.entries(room.docs).map(([id, d]) => ({ id, name: d.name, pdf: d.pdf, annotations: d.annotations }));
+    const docs = Object.entries(room.docs).map(([id, d]) => ({ id, name: d.name, category: d.category || '未分類', pdf: d.pdf, annotations: d.annotations }));
     return sendJson(res, 200, { code: room.code, name: room.name, docs });
   }
 
