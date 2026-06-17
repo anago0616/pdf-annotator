@@ -10,6 +10,60 @@
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
+/* ---------- 起動スプラッシュ ---------- */
+.splash {
+  position: fixed; inset: 0; z-index: 1000;
+  display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(150deg, #1a73e8 0%, #4d9aff 55%, #6aa9f4 100%);
+  transition: opacity .5s ease;
+}
+.splash.hide { opacity: 0; pointer-events: none; }
+.splash-inner { text-align: center; color: #fff; padding: 24px; }
+.splash-art {
+  width: 132px; height: auto; display: block; margin: 0 auto 18px;
+  filter: drop-shadow(0 10px 22px rgba(0,0,0,.28));
+  animation: splashFloat 2.6s ease-in-out infinite;
+}
+@keyframes splashFloat {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-7px); }
+}
+#splashStroke {
+  stroke-dasharray: 120;
+  stroke-dashoffset: 120;
+  animation: splashDraw 2.4s ease-in-out infinite;
+}
+@keyframes splashDraw {
+  0% { stroke-dashoffset: 120; }
+  62% { stroke-dashoffset: 0; }
+  100% { stroke-dashoffset: 0; }
+}
+.splash-art .ln { opacity: 0; animation: splashLine .5s ease forwards; }
+.splash-art .ln:nth-child(1) { animation-delay: .1s; }
+.splash-art .ln:nth-child(2) { animation-delay: .3s; }
+.splash-art .ln:nth-child(3) { animation-delay: .5s; }
+@keyframes splashLine { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: none; } }
+.splash-title { font-size: 22px; font-weight: 700; letter-spacing: .5px; }
+.splash-sub { margin-top: 6px; font-size: 13px; opacity: .9; }
+.splash-bar {
+  width: 160px; height: 4px; margin: 18px auto 0;
+  background: rgba(255,255,255,.3); border-radius: 4px; overflow: hidden;
+}
+.splash-bar span {
+  display: block; width: 40%; height: 100%; border-radius: 4px;
+  background: #fff; animation: splashBar 1.3s ease-in-out infinite;
+}
+@keyframes splashBar {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(320%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .splash-art, #splashStroke, .splash-bar span, .splash-art .ln { animation: none; }
+  #splashStroke { stroke-dashoffset: 0; }
+  .splash-art .ln { opacity: 1; }
+}
+
+
 button, .swatch, .tool-btn { touch-action: manipulation; } /* ダブルタップズーム抑止 */
 body { -webkit-user-select: none; user-select: none; }
 input, textarea { -webkit-user-select: text; user-select: text; }

@@ -1,6 +1,7 @@
 // 本番(Render)のリアルタイム同期検証: 2クライアントを繋ぎ、片方のopが他方に届くか
 const WebSocket = require('ws');
 const code = process.argv[2];
+const docId = process.argv[3] || 'doctest1';
 const base = 'wss://pdf-note.onrender.com/ws?code=' + code;
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 
@@ -27,7 +28,7 @@ a.on('message', raw => {
 // 両方つながったら、Aがストロークを送る
 setTimeout(() => {
   log('A が描画opを送信...');
-  a.send(JSON.stringify({ type:'op', seq:1, docId:'doctest1', page:1,
+  a.send(JSON.stringify({ type:'op', seq:1, docId:docId, page:1,
     op:{ kind:'stroke:add', stroke:{ tool:'pen', color:'#d93025', width:3, points:[[10,10],[50,50]] } } }));
 }, 4000);
 

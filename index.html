@@ -18,6 +18,41 @@
 </head>
 <body>
 
+<!-- 起動スプラッシュ(読み込み中の挿絵) -->
+<div id="splash" class="splash">
+  <div class="splash-inner">
+    <svg class="splash-art" viewBox="0 0 160 180" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" aria-hidden="true">
+      <!-- 影 -->
+      <rect x="34" y="26" width="92" height="128" rx="10" fill="rgba(0,0,0,.18)"/>
+      <!-- 用紙 -->
+      <rect x="30" y="20" width="92" height="128" rx="10" fill="#ffffff"/>
+      <!-- 折り返し -->
+      <path d="M104 20 L122 38 L104 38 Z" fill="#e3e9f2"/>
+      <!-- 本文の行 -->
+      <g fill="#cdd6e4">
+        <rect class="ln" x="44" y="46" width="64" height="7" rx="3.5"/>
+        <rect class="ln" x="44" y="62" width="64" height="7" rx="3.5"/>
+        <rect class="ln" x="44" y="78" width="48" height="7" rx="3.5"/>
+      </g>
+      <!-- 手書き風の波線(描かれていくアニメ) -->
+      <path id="splashStroke" d="M44 112 C58 98, 70 126, 84 112 S110 98, 116 112"
+            fill="none" stroke="#d93025" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+      <!-- ペン先(波線に沿って移動) -->
+      <g id="splashPen">
+        <path d="M0 0 l13 5 l-5 5 z" fill="#1a73e8"/>
+        <rect x="7" y="-1" width="22" height="5" rx="2.5" transform="rotate(22)" fill="#3a86ff"/>
+        <animateMotion dur="2.4s" repeatCount="indefinite" rotate="auto"
+          keyPoints="0;1;1" keyTimes="0;0.62;1" calcMode="linear">
+          <mpath xlink:href="#splashStroke" href="#splashStroke"/>
+        </animateMotion>
+      </g>
+    </svg>
+    <div class="splash-title">📄 PDFノート</div>
+    <div class="splash-sub">読み込み中…</div>
+    <div class="splash-bar"><span></span></div>
+  </div>
+</div>
+
 <!-- ホーム画面 -->
 <div id="homeView" class="view" hidden>
   <header class="home-header">

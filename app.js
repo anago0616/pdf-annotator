@@ -195,6 +195,12 @@ async function syncSharedNames() {
   for (const code of codes) {
     try {
       const res = await fetch(`/api/share/${code}/meta`);
+      if (res.status === 404) {
+        // サーバーからルームが消えている(無料プランの再起動等)→ 手元の文書から復元し共有を維持
+        const d = docs.find(x => x.shareCode === code);
+        if (d) await recreateRoom(d);
+        continue;
+      }
       if (!res.ok) continue;
       const meta = await res.json();
       const deleted = meta.deleted || [];
@@ -1171,7 +1177,20 @@ if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.
 window.__app = { importPdf, openEditor, renderHome, state, dbAll, exportAnnotatedPdf, startGroupShare, joinByCode };
 
 /* ================= 起動 ================= */
+function hideSplash() {
+  const s = $('splash');
+  if (!s) return;
+  s.classList.add('hide');
+  setTimeout(() => s.remove(), 600);
+}
+
 setupPinchZoom();
-renderHome();
+const splashStart = Date.now();
+Promise.resolve(renderHome()).finally(() => {
+  // 最低0.7秒は表示してチラつきを防ぐ
+  setTimeout(hideSplash, Math.max(0, 700 - (Date.now() - splashStart)));
+});
+// 念のための保険(何かで止まっても3秒で必ず消す)
+setTimeout(hideSplash, 3000);
 // ホーム表示中は定期的に共有中の文書名を取得して最新に保つ
 setInterval(() => { if (!views.home.hidden) syncSharedNames(); }, 6000);
