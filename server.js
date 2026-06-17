@@ -51,7 +51,7 @@ for (const f of fs.readdirSync(DATA_DIR)) {
       delete r.pdf;
       delete r.annotations;
     }
-    rooms.set(r.code, { ...r, clients: new Set(), saveTimer: null });
+    rooms.set(r.code, { deleted: [], ...r, clients: new Set(), saveTimer: null });
   } catch (e) {
     console.error('ルーム読み込み失敗:', f, e.message);
   }
@@ -133,14 +133,16 @@ const server = http.createServer(async (req, res) => {
       const wantCode = (typeof body.code === 'string' && /^[A-Za-z0-9]{6}$/.test(body.code)) ? body.code.toUpperCase() : null;
       let room = wantCode ? rooms.get(wantCode) : null;
       if (room) {
-        // 既存ルームへ統合(まだ無い文書だけ追加。既存文書の注釈は維持)
-        for (const [id, d] of Object.entries(docs)) if (!room.docs[id]) room.docs[id] = d;
+        // 既存ルームへ統合(まだ無い文書だけ追加。削除済みは復活させない。既存文書の注釈は維持)
+        for (const [id, d] of Object.entries(docs)) {
+          if (!room.docs[id] && !room.deleted.includes(id)) room.docs[id] = d;
+        }
         persistRoom(room);
         console.log('ルーム統合:', room.code);
         return sendJson(res, 200, { code: room.code });
       }
       const code = wantCode || newCode();
-      room = { code, name: String(body.name || '無題'), docs, clients: new Set(), saveTimer: null };
+      room = { code, name: String(body.name || '無題'), docs, deleted: [], clients: new Set(), saveTimer: null };
       rooms.set(code, room);
       persistRoom(room);
       console.log((wantCode ? 'ルーム復元:' : 'ルーム作成:'), code, room.name, `(${body.docs.length}文書)`);
@@ -188,6 +190,21 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // 文書の削除(共有相手にも反映)
+  const mDel = url.pathname.match(/^\/api\/share\/([A-Za-z0-9]{6})\/docs\/([^/]+)$/);
+  if (req.method === 'DELETE' && mDel) {
+    const room = rooms.get(mDel[1].toUpperCase());
+    if (!room) return sendJson(res, 404, { error: '共有コードが見つかりません' });
+    const docId = decodeURIComponent(mDel[2]);
+    delete room.docs[docId];
+    if (!room.deleted.includes(docId)) room.deleted.push(docId);
+    if (room.deleted.length > 500) room.deleted.shift(); // 際限なく増えないように
+    persistRoom(room);
+    broadcast(room, { type: 'doc:delete', docId });
+    console.log('文書削除:', room.code, docId);
+    return sendJson(res, 200, { ok: true });
+  }
+
   // 軽量メタ取得(文書名のみ。一覧画面の名前同期用・PDFは含めない)
   const mMeta = url.pathname.match(/^\/api\/share\/([A-Za-z0-9]{6})\/meta$/);
   if (req.method === 'GET' && mMeta) {
@@ -195,7 +212,7 @@ const server = http.createServer(async (req, res) => {
     if (!room) return sendJson(res, 404, { error: '共有コードが見つかりません' });
     const docs = {};
     for (const [id, d] of Object.entries(room.docs)) docs[id] = d.name;
-    return sendJson(res, 200, { name: room.name, docs });
+    return sendJson(res, 200, { name: room.name, docs, deleted: room.deleted });
   }
 
   // 個別文書の取得(doc:add通知を受けた参加者用)
@@ -244,7 +261,7 @@ wss.on('connection', (ws, req) => {
   const allAnnotations = {};
   const docNames = {};
   for (const [id, d] of Object.entries(room.docs)) { allAnnotations[id] = d.annotations; docNames[id] = d.name; }
-  ws.send(JSON.stringify({ type: 'init', annotations: allAnnotations, docNames, members: room.clients.size, names: names() }));
+  ws.send(JSON.stringify({ type: 'init', annotations: allAnnotations, docNames, deleted: room.deleted, members: room.clients.size, names: names() }));
   broadcast(room, { type: 'members', count: room.clients.size, names: names() }, ws);
   console.log(`参加: ${code} ${user} (${room.clients.size}人)`);
 

@@ -170,6 +170,10 @@ async function renderHome() {
       card.querySelector('.act-share').addEventListener('click', () => shareDoc(d));
       card.querySelector('.act-delete').addEventListener('click', async () => {
         if (confirm(`「${d.name}」を削除しますか？`)) {
+          // 共有中なら相手の端末からも削除
+          if (d.shareCode && d.remoteId) {
+            fetch(`/api/share/${d.shareCode}/docs/${encodeURIComponent(d.remoteId)}`, { method: 'DELETE' }).catch(() => {});
+          }
           await dbDelete(d.id);
           renderHome();
         }
@@ -193,7 +197,14 @@ async function syncSharedNames() {
       const res = await fetch(`/api/share/${code}/meta`);
       if (!res.ok) continue;
       const meta = await res.json();
+      const deleted = meta.deleted || [];
       for (const d of docs.filter(x => x.shareCode === code && x.remoteId)) {
+        if (deleted.includes(d.remoteId)) {
+          // 相手が削除した文書をローカルからも削除
+          await dbDelete(d.id);
+          changed = true;
+          continue;
+        }
         const sName = meta.docs[d.remoteId];
         if (sName && sName !== d.name) { d.name = sName; await dbPut(d); changed = true; }
       }
@@ -884,6 +895,24 @@ async function renameLocalDoc(shareCode, remoteId, name) {
   if (!views.home.hidden) renderHome();
 }
 
+// doc:delete通知: 共有相手が削除した文書をローカルからも削除
+async function deleteLocalDoc(shareCode, remoteId) {
+  const d = (await dbAll()).find(x => x.shareCode === shareCode && x.remoteId === remoteId);
+  if (!d) return;
+  // 自分がその文書を開いていたらホームへ戻す
+  if (state.doc && state.doc.id === d.id) {
+    disconnectShare();
+    if (state.pdf) { try { await state.pdf.destroy(); } catch (_) {} state.pdf = null; }
+    state.doc = null;
+    showToast(`共有相手が「${d.name}」を削除しました`);
+    await dbDelete(d.id);
+    renderHome();
+    return;
+  }
+  await dbDelete(d.id);
+  if (!views.home.hidden) renderHome();
+}
+
 function connectShare(doc) {
   disconnectShare();
   setShareState('接続中…');
@@ -905,16 +934,19 @@ function connectShare(doc) {
       }
       state.pages.forEach(redrawOverlay);
       scheduleSave();
-      // 同タイトルの他文書の注釈・名前もローカルに反映
+      // 同タイトルの他文書の注釈・名前・削除をローカルに反映
       const dn = msg.docNames || {};
+      const del = msg.deleted || [];
       (async () => {
         const all2 = await dbAll();
-        const siblings = all2.filter(d => d.shareCode === doc.shareCode && d.id !== doc.id && d.remoteId && all[d.remoteId]);
-        for (const s of siblings) {
+        for (const s of all2.filter(d => d.shareCode === doc.shareCode && d.id !== doc.id && d.remoteId)) {
+          if (del.includes(s.remoteId)) { await dbDelete(s.id); continue; } // 相手が削除
+          if (!all[s.remoteId]) continue;
           s.annotations = all[s.remoteId];
           if (dn[s.remoteId]) s.name = dn[s.remoteId];
           await dbPut(s);
         }
+        if (!views.home.hidden) renderHome();
       })();
       // 開いている文書の名前もサーバーに合わせる
       if (dn[state.doc.remoteId] && dn[state.doc.remoteId] !== state.doc.name) {
@@ -935,6 +967,8 @@ function connectShare(doc) {
       receiveSharedDoc(doc.shareCode, msg.docId);
     } else if (msg.type === 'doc:rename') {
       renameLocalDoc(doc.shareCode, msg.docId, msg.name);
+    } else if (msg.type === 'doc:delete') {
+      deleteLocalDoc(doc.shareCode, msg.docId);
     }
   };
 
