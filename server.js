@@ -233,6 +233,9 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, { code: room.code, name: room.name, docs });
   }
 
+  // 死活確認(自己ping・監視用。軽量)
+  if (url.pathname === '/healthz') { res.writeHead(200, { 'Content-Type': 'text/plain' }); return res.end('ok'); }
+
   // 静的ファイル
   let filePath = path.normalize(path.join(ROOT, url.pathname === '/' ? 'index.html' : url.pathname));
   if (!filePath.startsWith(ROOT) || filePath.startsWith(DATA_DIR)) {
@@ -286,3 +289,18 @@ wss.on('connection', (ws, req) => {
 server.listen(PORT, () => {
   console.log(`PDFノート サーバー起動: http://localhost:${PORT}`);
 });
+
+/* ---- スリープ防止(無料プラン用・自己ping) ----
+ * Render無料プランは15分アクセスがないとスリープし、復帰に数十秒かかる。
+ * 自分の公開URLを10分ごとに叩いて起こし続け、初回の待ち画面が出ないようにする。
+ */
+const SELF_URL = process.env.RENDER_EXTERNAL_URL;
+if (SELF_URL) {
+  const https = require('https');
+  const ping = () => {
+    https.get(SELF_URL + '/healthz', (r) => { r.resume(); })
+      .on('error', () => {});
+  };
+  setInterval(ping, 10 * 60 * 1000); // 10分ごと(スリープ閾値15分より短く)
+  console.log('スリープ防止の自己pingを有効化:', SELF_URL);
+}
