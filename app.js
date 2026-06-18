@@ -1120,9 +1120,13 @@ function connectRoom(code) {
     c.ws = null; c.offline = true;
     if (!conns.has(code)) return; // 共有解除済み
     applySyncUI();
-    if (e.code === 4404 && c.recreateAttempts < 5) {
-      c.recreateAttempts++;
-      recreateRoom(code).then(() => { c.retry = setTimeout(() => connectRoom(code), 800); });
+    if (e.code === 4404) {
+      // サーバーからルームが消えている → 復元を試みて再接続(成功するまで諦めない)
+      c.recreateAttempts = (c.recreateAttempts || 0) + 1;
+      const backoff = Math.min(15000, 1500 * c.recreateAttempts); // 失敗時は徐々に間隔を空ける(最大15秒)
+      recreateRoom(code).then((ok) => {
+        c.retry = setTimeout(() => connectRoom(code), ok ? 600 : backoff);
+      });
       return;
     }
     c.retry = setTimeout(() => connectRoom(code), 2500);
@@ -1131,16 +1135,28 @@ function connectRoom(code) {
 }
 
 // 消えたフォルダのルームを手元の文書から同じコードで再作成(自己修復)
+// 大きいPDFや多数の文書でも通るよう、1件ずつ分割アップロードする
 async function recreateRoom(code) {
   try {
     const docs = (await dbAll()).filter(d => d.shareCode === code && d.remoteId);
     if (!docs.length) return false;
     const name = docs[0].category || '共有';
-    const res = await fetch('/api/share', {
+    // まず1文書だけでルーム作成(巨大な単一リクエストを避ける)
+    const first = await fetch('/api/share', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, name, docs: docs.map(libDocPayload) })
+      body: JSON.stringify({ code, name, docs: [libDocPayload(docs[0])] })
     });
-    return res.ok;
+    if (!first.ok) { console.error('共有の復元に失敗:', first.status); return false; }
+    // 残りは1件ずつ追加(1件失敗しても続行)
+    for (const d of docs.slice(1)) {
+      try {
+        await fetch(`/api/share/${code}/docs`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(libDocPayload(d))
+        });
+      } catch (_) {}
+    }
+    return true;
   } catch (err) { console.error('共有の復元に失敗:', err); return false; }
 }
 
