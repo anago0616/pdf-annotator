@@ -112,9 +112,19 @@
     </div>
   </div>
 
+  <!-- テキスト選択中の編集バー(色・サイズ・縦横・編集・削除) -->
+  <div id="textToolbar" class="text-toolbar" hidden>
+    <div id="ttColors" class="tt-colors"></div>
+    <button id="ttSizeDown" class="tt-btn" title="小さく">A−</button>
+    <button id="ttSizeUp" class="tt-btn" title="大きく">A＋</button>
+    <button id="ttVertical" class="tt-btn" title="縦書き/横書き">縦</button>
+    <button id="ttEdit" class="tt-btn" title="文字を編集">✏️</button>
+    <button id="ttDelete" class="tt-btn" title="削除">🗑️</button>
+  </div>
+
   <!-- テキスト入力ポップアップ -->
   <div id="textEditor" class="text-editor" hidden>
-    <textarea id="textInput" rows="3" placeholder="テキストを入力"></textarea>
+    <textarea id="textInput" rows="5" placeholder="テキストを入力"></textarea>
     <div class="text-editor-actions">
       <button id="textCancelBtn">キャンセル</button>
       <button id="textDeleteBtn" class="danger" hidden>削除</button>

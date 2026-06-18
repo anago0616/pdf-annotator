@@ -52,9 +52,16 @@ const _measureCtx = document.createElement('canvas').getContext('2d');
 function textMetrics(t) {
   _measureCtx.font = `${t.size}px -apple-system, "Hiragino Sans", "Yu Gothic UI", sans-serif`;
   const lines = t.text.split('\n');
+  if (t.vertical) {
+    // 縦書き: 文字を縦に積み、行は右→左。1列の幅 colW
+    const colW = t.size * 1.4;
+    let maxChars = 1;
+    for (const l of lines) maxChars = Math.max(maxChars, [...l].length);
+    return { w: lines.length * colW, h: maxChars * t.size * 1.1, lines, colW, vertical: true };
+  }
   let w = 1;
   for (const l of lines) w = Math.max(w, _measureCtx.measureText(l).width);
-  return { w, h: lines.length * t.size * 1.3, lines };
+  return { w, h: lines.length * t.size * 1.3, lines, vertical: false };
 }
 // テキストのヒット判定(ページ座標)。当たったindex、なければ -1
 function hitText(ann, x, y) {
@@ -319,6 +326,7 @@ async function openEditor(id) {
   $('saveStatus').textContent = '';
   views.home.hidden = true;
   views.editor.hidden = false;
+  updateTextToolbar();
   // ライブラリ同期は常時接続なので個別接続はしない。状態表示のみ更新。
   applySyncUI();
   state.pdf = await pdfjsLib.getDocument({ data: doc.pdfData.slice(0) }).promise;
@@ -428,9 +436,22 @@ function drawAnnotations(ctx, ann, factor) {
     ctx.fillStyle = t.color;
     ctx.font = `${t.size * factor}px -apple-system, "Hiragino Sans", "Yu Gothic UI", sans-serif`;
     ctx.textBaseline = 'top';
-    t.text.split('\n').forEach((line, i) => {
-      ctx.fillText(line, t.x * factor, (t.y + i * t.size * 1.3) * factor);
-    });
+    const lines = t.text.split('\n');
+    if (t.vertical) {
+      const colW = t.size * 1.4;
+      ctx.textAlign = 'center';
+      lines.forEach((line, li) => {
+        const cx = (t.x + (lines.length - 1 - li) * colW + colW / 2) * factor; // 行は右→左
+        [...line].forEach((ch, ci) => {
+          ctx.fillText(ch, cx, (t.y + ci * t.size * 1.1) * factor);
+        });
+      });
+    } else {
+      ctx.textAlign = 'left';
+      lines.forEach((line, i) => {
+        ctx.fillText(line, t.x * factor, (t.y + i * t.size * 1.3) * factor);
+      });
+    }
     ctx.restore();
   }
 }
@@ -455,8 +476,9 @@ function redrawOverlay(info) {
     ctx.setLineDash([]);
     ctx.fillStyle = '#1a73e8';
     ctx.beginPath();
-    ctx.arc((t.x + m.w) * factor + pad, (t.y + m.h) * factor + pad, 8, 0, Math.PI * 2);
+    ctx.arc((t.x + m.w) * factor + pad, (t.y + m.h) * factor + pad, 12, 0, Math.PI * 2);
     ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
     ctx.restore();
   }
 }
@@ -506,7 +528,7 @@ function attachPointerHandlers(info) {
       if (sel && sel.page === info.num && ann.texts[sel.index]) {
         const t = ann.texts[sel.index];
         const m = textMetrics(t);
-        const hs = 18 / info.scale; // ハンドル当たり判定(ページ単位)
+        const hs = 28 / info.scale; // ハンドル当たり判定(ページ単位・指でも掴みやすく)
         if (Math.abs(x - (t.x + m.w)) < hs && Math.abs(y - (t.y + m.h)) < hs) {
           pushUndo(info.num);
           textAction = { mode: 'resize', index: sel.index, origSize: t.size, origW: m.w };
@@ -524,10 +546,11 @@ function attachPointerHandlers(info) {
         textAction = { mode: 'move', index: idx, startX: x, startY: y, origX: t.x, origY: t.y, moved: false, wasSel };
         try { ov.setPointerCapture(e.pointerId); } catch (_) {}
         redrawOverlay(info);
+        updateTextToolbar();
         return;
       }
       // 3) 空白 → 選択解除、なければ新規テキスト作成
-      if (state.selectedText) { state.selectedText = null; redrawOverlay(info); }
+      if (state.selectedText) { state.selectedText = null; redrawOverlay(info); updateTextToolbar(); }
       else openNewTextEditor(info, x, y);
     }
   });
@@ -577,6 +600,7 @@ function attachPointerHandlers(info) {
       } else {
         scheduleSave();
         sendPageSet(info.num);
+        updateTextToolbar();
       }
       return;
     }
@@ -653,6 +677,7 @@ $('textOkBtn').addEventListener('click', () => {
   scheduleSave();
   sendPageSet(et.page);
   closeTextEditor();
+  updateTextToolbar();
 });
 $('textCancelBtn').addEventListener('click', closeTextEditor);
 $('textDeleteBtn').addEventListener('click', () => {
@@ -667,6 +692,68 @@ $('textDeleteBtn').addEventListener('click', () => {
     sendPageSet(et.page);
   }
   closeTextEditor();
+  updateTextToolbar();
+});
+
+/* ---- テキスト選択中の編集バー(色・サイズ・縦横・編集・削除) ---- */
+// 色ボタンを生成
+const ttColors = $('ttColors');
+COLORS.forEach((c) => {
+  const b = document.createElement('div');
+  b.className = 'tt-color';
+  b.style.background = c;
+  b.dataset.color = c;
+  b.addEventListener('click', () => { state.color = c; withSelectedText((t) => { t.color = c; }); });
+  ttColors.appendChild(b);
+});
+
+function selectedTextObj() {
+  const sel = state.selectedText;
+  if (!sel) return null;
+  const t = pageAnn(state.doc, sel.page).texts[sel.index];
+  return t ? { sel, t } : null;
+}
+// 選択中テキストを変更して再描画・保存・同期
+function withSelectedText(fn) {
+  const cur = selectedTextObj();
+  if (!cur) return;
+  pushUndo(cur.sel.page);
+  fn(cur.t);
+  const info = state.pages.find(p => p.num === cur.sel.page);
+  if (info) redrawOverlay(info);
+  scheduleSave();
+  sendPageSet(cur.sel.page);
+  updateTextToolbar();
+}
+function updateTextToolbar() {
+  const tb = $('textToolbar');
+  const cur = (state.tool === 'text' && !views.editor.hidden) ? selectedTextObj() : null;
+  if (!cur) { tb.hidden = true; return; }
+  tb.hidden = false;
+  $('ttVertical').textContent = cur.t.vertical ? '横' : '縦'; // 押すと切り替わる先を表示
+  ttColors.querySelectorAll('.tt-color').forEach(s => s.classList.toggle('active', s.dataset.color === cur.t.color));
+}
+
+$('ttSizeDown').addEventListener('click', () => withSelectedText((t) => { t.size = Math.max(8, t.size - 4); }));
+$('ttSizeUp').addEventListener('click', () => withSelectedText((t) => { t.size = Math.min(400, t.size + 4); }));
+$('ttVertical').addEventListener('click', () => withSelectedText((t) => { t.vertical = !t.vertical; }));
+$('ttEdit').addEventListener('click', () => {
+  const cur = selectedTextObj();
+  if (!cur) return;
+  const info = state.pages.find(p => p.num === cur.sel.page);
+  if (info) openTextEditorFor(info, cur.sel.index);
+});
+$('ttDelete').addEventListener('click', () => {
+  const sel = state.selectedText;
+  if (!sel) return;
+  pushUndo(sel.page);
+  pageAnn(state.doc, sel.page).texts.splice(sel.index, 1);
+  state.selectedText = null;
+  const info = state.pages.find(p => p.num === sel.page);
+  if (info) redrawOverlay(info);
+  scheduleSave();
+  sendPageSet(sel.page);
+  updateTextToolbar();
 });
 
 /* ---- 元に戻す ---- */
@@ -708,6 +795,7 @@ function setTool(tool) {
     const info = state.pages.find(p => p.num === sel.page);
     if (info) redrawOverlay(info);
   }
+  updateTextToolbar();
 }
 document.querySelectorAll('.tool-btn[data-tool]').forEach(b =>
   b.addEventListener('click', () => setTool(b.dataset.tool)));

@@ -327,6 +327,29 @@ html, body {
 .text-editor-actions .primary { background: var(--primary); color: #fff; }
 .text-editor-actions .danger { background: #fdecec; color: #d93025; }
 
+/* テキスト選択中の編集バー */
+.text-toolbar {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  bottom: calc(var(--toolbar-h, 96px) + 10px);
+  display: flex; align-items: center; gap: 6px; flex-wrap: nowrap;
+  max-width: 94vw; overflow-x: auto;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 12px; padding: 7px 9px;
+  box-shadow: 0 4px 18px rgba(0,0,0,.22); z-index: 18;
+}
+.tt-colors { display: flex; gap: 5px; }
+.tt-color {
+  width: 24px; height: 24px; border-radius: 50%; border: 2px solid transparent;
+  flex-shrink: 0; cursor: pointer;
+}
+.tt-color.active { border-color: #1a73e8; box-shadow: 0 0 0 2px #fff inset; }
+.tt-btn {
+  border: 1px solid var(--border); background: var(--bg);
+  border-radius: 8px; min-width: 38px; height: 34px; padding: 0 8px;
+  font-size: 15px; cursor: pointer; flex-shrink: 0; white-space: nowrap;
+}
+.tt-btn:active { background: #e8eaed; }
+
 /* ---------- トースト ---------- */
 .toast {
   position: fixed; left: 50%; bottom: 110px;
