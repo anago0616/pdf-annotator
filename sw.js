@@ -1,6 +1,6 @@
 // PDFノート Service Worker
 // アプリ本体とCDNライブラリをキャッシュし、電波の悪い場所やオフラインでも起動できるようにする
-const CACHE = 'pdfnote-v14';
+const CACHE = 'pdfnote-v15';
 const APP_SHELL = [
   './',
   './index.html',

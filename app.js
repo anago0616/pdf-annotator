@@ -72,7 +72,8 @@ function getGuestName() {
 async function renderHome() {
   views.editor.hidden = true;
   views.home.hidden = false;
-  const docs = (await dbAll()).sort((a, b) => b.updatedAt - a.updatedAt);
+  // 文書は名前の昇順で固定表示(数字は自然順。例: 資料2 < 資料10)
+  const docs = (await dbAll()).sort((a, b) => a.name.localeCompare(b.name, 'ja', { numeric: true }));
   const list = $('docList');
   list.innerHTML = '';
   $('emptyState').hidden = docs.length > 0;
