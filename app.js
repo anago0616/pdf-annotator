@@ -764,6 +764,48 @@ $('shareBtn').addEventListener('click', async () => {
   shareDoc(state.doc);
 });
 
+// 印刷: 注釈付きPDFを生成し、印刷ダイアログを開く
+async function printDoc(doc) {
+  let url = null;
+  try {
+    showToast('印刷を準備しています…');
+    const bytes = await exportAnnotatedPdf(doc);
+    const blob = new Blob([bytes], { type: 'application/pdf' });
+    url = URL.createObjectURL(blob);
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    iframe.src = url;
+    document.body.appendChild(iframe);
+    iframe.onload = () => {
+      try {
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+      } catch (_) {
+        // 印刷をフレーム内で起動できない端末は新しいタブで開く
+        window.open(url, '_blank');
+      }
+    };
+    // 後片付け(印刷ダイアログが閉じた後を想定して遅延解放)
+    setTimeout(() => { iframe.remove(); URL.revokeObjectURL(url); }, 60000);
+  } catch (err) {
+    console.error(err);
+    if (url) URL.revokeObjectURL(url);
+    showToast('印刷の準備に失敗しました');
+  }
+}
+
+$('printBtn').addEventListener('click', async () => {
+  clearTimeout(saveTimer);
+  state.doc.updatedAt = Date.now();
+  await dbPut(state.doc);
+  printDoc(state.doc);
+});
+
 /* ================= リアルタイム共同編集(フォルダ単位) ================= */
 // 共有中の各フォルダ(shareCode)ごとに常時接続を維持する
 const conns = new Map(); // code -> { ws, retry, recreateAttempts, members, offline }
