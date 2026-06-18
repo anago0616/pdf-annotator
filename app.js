@@ -1473,6 +1473,13 @@ function hideSplash() {
 }
 
 setupPinchZoom();
+// ブラウザのズーム(UIごと拡大される)を無効化。PDFのズームはアプリ内のボタン/ピンチで行う。
+window.addEventListener('wheel', (e) => { if (e.ctrlKey) e.preventDefault(); }, { passive: false });
+window.addEventListener('keydown', (e) => {
+  // 拡大/縮小は止めるが、Ctrl+0(100%に戻す)は残す
+  if ((e.ctrlKey || e.metaKey) && ['+', '-', '='].includes(e.key)) e.preventDefault();
+});
+document.addEventListener('gesturestart', (e) => e.preventDefault()); // Safari のピンチズーム抑止
 // アプリが前面に復帰/再表示されたら固まり状態を解除
 // (iOSはPWAを再読込せず復帰するため、落として開き直しても残骸が残ることがある)
 document.addEventListener('visibilitychange', () => { if (!document.hidden) resetGestureState(); });
