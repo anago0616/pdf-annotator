@@ -837,8 +837,14 @@ async function changeZoom(factor) {
 }
 
 /* ---- ピンチ操作(2本指で拡大縮小・パン) ---- */
-const touchPts = new Map(); // pointerId -> {x, y}  ※指の本数管理
-function activeTouchCount() { return touchPts.size; }
+const touchPts = new Map(); // pointerId -> 接地時刻  ※指の本数管理
+function activeTouchCount() {
+  // 取りこぼし対策: 5秒以上前の指(pointerupが来なかった分)は無効として掃除する
+  // → これがないと残骸が溜まって「突然編集できなくなる」状態になる
+  const now = Date.now();
+  for (const [id, ts] of touchPts) if (now - ts > 5000) touchPts.delete(id);
+  return touchPts.size;
+}
 
 function setupPinchZoom() {
   const container = $('pageContainer');
@@ -918,11 +924,18 @@ function setupPinchZoom() {
 
   // 指の本数を pointer で追跡(描画ハンドラの2本指判定に使用)
   container.addEventListener('pointerdown', (e) => {
-    if (e.pointerType === 'touch') touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (e.pointerType === 'touch') touchPts.set(e.pointerId, Date.now());
   }, true);
-  const dropPt = (e) => { if (e.pointerType === 'touch') touchPts.delete(e.pointerId); };
-  container.addEventListener('pointerup', dropPt, true);
-  container.addEventListener('pointercancel', dropPt, true);
+  // 解除は window で拾う(描画中にオーバーレイがキャプチャした指の pointerup を
+  // container では取りこぼすことがあり、本数が減らず編集不能になるのを防ぐ)
+  const dropPt = (e) => {
+    if (e.pointerType !== 'touch') return;
+    touchPts.delete(e.pointerId);
+    if (touchPts.size === 0) state.pinching = false; // 全指が離れたらピンチ状態を確実に解除
+  };
+  window.addEventListener('pointerup', dropPt, true);
+  window.addEventListener('pointercancel', dropPt, true);
+  window.addEventListener('lostpointercapture', dropPt, true);
 }
 
 /* ---- 戻る ---- */
