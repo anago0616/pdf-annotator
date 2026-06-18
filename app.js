@@ -89,9 +89,33 @@ function getGuestName() {
 }
 
 /* ================= ホーム画面 ================= */
+let selectMode = false;          // 一括選択モード
+const selectedIds = new Set();   // 選択中の文書ID
+
+// 複数文書をまとめて削除(共有中なら相手の端末からも削除)
+async function deleteDocs(docs) {
+  for (const d of docs) {
+    if (d.shareCode && d.remoteId) {
+      fetch(`/api/share/${d.shareCode}/docs/${encodeURIComponent(d.remoteId)}`, { method: 'DELETE' }).catch(() => {});
+    }
+    await dbDelete(d.id);
+  }
+}
+
+function updateBulkBar() {
+  const bar = $('bulkBar');
+  bar.hidden = !selectMode;
+  if (!selectMode) return;
+  $('bulkCount').textContent = `${selectedIds.size}件選択`;
+  $('bulkDelete').disabled = selectedIds.size === 0;
+}
+
 async function renderHome() {
   views.editor.hidden = true;
   views.home.hidden = false;
+  $('selectBtn').textContent = selectMode ? '✕ 解除' : '☑ 選択';
+  $('addBtn').style.display = selectMode ? 'none' : '';
+  updateBulkBar();
   // 文書は名前の昇順で固定表示(数字は自然順。例: 資料2 < 資料10)
   const docs = (await dbAll()).sort((a, b) => a.name.localeCompare(b.name, 'ja', { numeric: true }));
   const list = $('docList');
@@ -149,8 +173,9 @@ async function renderHome() {
     for (const d of items) {
       const card = document.createElement('div');
       card.className = 'doc-card';
+      if (selectMode && selectedIds.has(d.id)) card.classList.add('selected');
       card.innerHTML = `
-        <div class="doc-icon">📄</div>
+        ${selectMode ? `<div class="doc-check">${selectedIds.has(d.id) ? '✓' : ''}</div>` : '<div class="doc-icon">📄</div>'}
         <div class="doc-info">
           <div class="doc-name"></div>
           <div class="doc-meta">${d.pageCount}ページ ・ ${new Date(d.updatedAt).toLocaleString('ja-JP')}</div>
@@ -162,6 +187,18 @@ async function renderHome() {
           <button class="icon-btn act-delete" title="削除">🗑️</button>
         </div>`;
       card.querySelector('.doc-name').textContent = d.name;
+      if (selectMode) {
+        // 選択モード: カードのタップで選択トグル
+        const toggle = () => {
+          if (selectedIds.has(d.id)) selectedIds.delete(d.id);
+          else selectedIds.add(d.id);
+          renderHome();
+        };
+        card.querySelector('.doc-check').addEventListener('click', toggle);
+        card.querySelector('.doc-info').addEventListener('click', toggle);
+        list.appendChild(card);
+        continue;
+      }
       card.querySelector('.doc-info').addEventListener('click', () => openEditor(d.id));
       card.querySelector('.doc-icon').addEventListener('click', () => openEditor(d.id));
       card.querySelector('.act-rename').addEventListener('click', async () => {
@@ -191,11 +228,7 @@ async function renderHome() {
       card.querySelector('.act-share').addEventListener('click', () => shareDoc(d));
       card.querySelector('.act-delete').addEventListener('click', async () => {
         if (confirm(`「${d.name}」を削除しますか？`)) {
-          // 共有中なら相手の端末からも削除
-          if (d.shareCode && d.remoteId) {
-            fetch(`/api/share/${d.shareCode}/docs/${encodeURIComponent(d.remoteId)}`, { method: 'DELETE' }).catch(() => {});
-          }
-          await dbDelete(d.id);
+          await deleteDocs([d]);
           renderHome();
         }
       });
@@ -1270,6 +1303,35 @@ $('liveBtn').addEventListener('click', async () => {
 $('joinBtn').addEventListener('click', () => {
   const code = prompt('共有コードを入力(6桁)');
   if (code) joinFolder(code).catch(err => { console.error(err); showToast('参加に失敗しました'); });
+});
+
+/* ---- 一括選択・削除 ---- */
+$('selectBtn').addEventListener('click', () => {
+  selectMode = !selectMode;
+  selectedIds.clear();
+  renderHome();
+});
+$('bulkCancel').addEventListener('click', () => {
+  selectMode = false;
+  selectedIds.clear();
+  renderHome();
+});
+$('bulkSelectAll').addEventListener('click', async () => {
+  const all = await dbAll();
+  if (selectedIds.size === all.length) selectedIds.clear(); // 全選択済みなら全解除
+  else for (const d of all) selectedIds.add(d.id);
+  renderHome();
+});
+$('bulkDelete').addEventListener('click', async () => {
+  if (selectedIds.size === 0) return;
+  if (!confirm(`選択した ${selectedIds.size} 件を削除しますか？(共有中のものは相手の端末からも削除されます)`)) return;
+  const all = await dbAll();
+  const docs = all.filter(d => selectedIds.has(d.id));
+  await deleteDocs(docs);
+  selectMode = false;
+  selectedIds.clear();
+  showToast(`${docs.length}件を削除しました`);
+  renderHome();
 });
 
 /* ================= PWA ================= */

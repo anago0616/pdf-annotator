@@ -58,7 +58,8 @@
   <header class="home-header">
     <div class="home-header-row">
       <h1>📄 PDFノート</h1>
-      <button id="joinBtn" class="join-btn">🔗 コードで参加</button>
+      <button id="selectBtn" class="join-btn">☑ 選択</button>
+      <button id="joinBtn" class="join-btn">🔗 参加</button>
     </div>
     <p class="subtitle">PDFに書き込み・共有できるノートアプリ</p>
   </header>
@@ -70,6 +71,12 @@
   </div>
   <button id="addBtn" class="fab" title="PDFを追加">＋</button>
   <input type="file" id="fileInput" accept="application/pdf,.pdf" multiple hidden>
+  <div id="bulkBar" class="bulk-bar" hidden>
+    <button id="bulkSelectAll" class="bulk-btn">全選択</button>
+    <span id="bulkCount" class="bulk-count">0件</span>
+    <button id="bulkDelete" class="bulk-btn danger">🗑️ 削除</button>
+    <button id="bulkCancel" class="bulk-btn">キャンセル</button>
+  </div>
 </div>
 
 <!-- 編集画面 -->
