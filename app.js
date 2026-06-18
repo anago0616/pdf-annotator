@@ -123,8 +123,8 @@ async function renderHome() {
   $('selectBtn').textContent = selectMode ? '✕ 解除' : '☑ 選択';
   $('addBtn').style.display = selectMode ? 'none' : '';
   updateBulkBar();
-  // 文書は名前の昇順で固定表示(数字は自然順。例: 資料2 < 資料10)
-  const docs = (await dbAll()).sort((a, b) => a.name.localeCompare(b.name, 'ja', { numeric: true }));
+  // 文書は名前の昇順で固定表示(数字は自然順。例: 資料2 < 資料10)。名前欠損でも落ちないようガード
+  const docs = (await dbAll()).sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ja', { numeric: true }));
   const list = $('docList');
   list.innerHTML = '';
   $('emptyState').hidden = docs.length > 0;
@@ -778,9 +778,15 @@ function scheduleSave() {
   $('saveStatus').textContent = '保存中…';
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
-    state.doc.updatedAt = Date.now();
-    await dbPut(state.doc);
-    $('saveStatus').textContent = '保存済み ✓';
+    try {
+      state.doc.updatedAt = Date.now();
+      await dbPut(state.doc);
+      $('saveStatus').textContent = '保存済み ✓';
+    } catch (err) {
+      // 保存失敗(容量超過など)でも編集は続けられるようにする
+      console.error('保存に失敗:', err);
+      $('saveStatus').textContent = '保存できません(空き容量を確認)';
+    }
   }, 600);
 }
 
