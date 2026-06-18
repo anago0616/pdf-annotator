@@ -270,6 +270,7 @@ html, body {
   background: var(--card); border-top: 1px solid var(--border);
   box-shadow: 0 -2px 10px rgba(0,0,0,.08); z-index: 20;
 }
+.bulk-bar[hidden] { display: none; } /* 選択モード時のみ表示(display:flexがhidden属性を上書きするのを防ぐ) */
 .bulk-count { font-size: 14px; font-weight: 600; flex: 1; }
 .bulk-btn {
   border: 1px solid var(--border); background: var(--bg);
