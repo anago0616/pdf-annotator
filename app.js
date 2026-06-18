@@ -95,15 +95,32 @@ async function renderHome() {
     const items = groups.get(cat);
     const isClosed = collapsed.has(cat);
 
+    const groupCode = (items.find(d => d.shareCode) || {}).shareCode;
+    const conn = groupCode ? conns.get(groupCode) : null;
+    const shareLabel = groupCode
+      ? `🔗 ${groupCode}${conn && !conn.offline ? ' ・' + (conn.members || 1) + '台' : ''}`
+      : '🔗 共有';
     const header = document.createElement('div');
     header.className = 'cat-header';
-    header.innerHTML = `<span class="cat-arrow">${isClosed ? '▶' : '▼'}</span>📁 <span class="cat-name"></span><span class="cat-count">${items.length}</span>`;
+    header.innerHTML = `<span class="cat-arrow">${isClosed ? '▶' : '▼'}</span>📁 <span class="cat-name"></span><span class="cat-count">${items.length}</span><span class="spacer"></span><button class="cat-share-btn${groupCode ? ' shared' : ''}"></button>`;
     header.querySelector('.cat-name').textContent = cat;
+    header.querySelector('.cat-share-btn').textContent = shareLabel;
     header.addEventListener('click', () => {
       if (collapsed.has(cat)) collapsed.delete(cat);
       else collapsed.add(cat);
       localStorage.setItem('pdfnote_collapsed', JSON.stringify([...collapsed]));
       renderHome();
+    });
+    header.querySelector('.cat-share-btn').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      try {
+        if (groupCode) { showShareDialog(groupCode, cat); }
+        else {
+          if (!confirm(`「${cat}」の${items.length}件を共有しますか？(コードを相手に伝えると同期されます)`)) return;
+          const code = await shareFolder(cat);
+          showShareDialog(code, cat);
+        }
+      } catch (err) { console.error(err); showToast('共有サーバーに接続できません'); }
     });
     list.appendChild(header);
     if (isClosed) continue;
@@ -137,7 +154,7 @@ async function renderHome() {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ name: d.name })
-            }).then(res => { if (res.status === 404) recreateLibRoom(); }).catch(() => {});
+            }).then(res => { if (res.status === 404) recreateRoom(d.shareCode); }).catch(() => {});
           }
           renderHome();
         }
@@ -213,11 +230,17 @@ $('importOkBtn').addEventListener('click', async () => {
   pendingFiles = null;
   $('importDialog').hidden = true;
   const category = $('importCategory').value.trim() || '未分類';
+  // 取り込み先フォルダが共有中なら、新しい文書もそのフォルダの共有に追加
+  const folderCode = ((await dbAll()).find(d => (d.category || '未分類') === category && d.shareCode) || {}).shareCode;
   let ok = 0, fail = 0, lastDoc = null;
   for (const file of files) {
     try {
       lastDoc = await importPdf(file.name, await file.arrayBuffer(), category);
-      await addDocToLibrary(lastDoc); // 同期中なら全端末へ自動配信
+      if (folderCode) {
+        lastDoc.shareCode = folderCode; lastDoc.remoteId = lastDoc.id;
+        await dbPut(lastDoc);
+        await addDocToFolderShare(lastDoc); // フォルダ共有中なら配信
+      }
       ok++;
     } catch (err) {
       console.error('取り込み失敗:', file.name, err);
@@ -738,10 +761,9 @@ $('shareBtn').addEventListener('click', async () => {
   shareDoc(state.doc);
 });
 
-/* ================= リアルタイム共同編集 ================= */
-let ws = null;
-let wsRetryTimer = null;
-let recreateAttempts = 0; // ルーム自己修復の試行回数(init成功でリセット)
+/* ================= リアルタイム共同編集(フォルダ単位) ================= */
+// 共有中の各フォルダ(shareCode)ごとに常時接続を維持する
+const conns = new Map(); // code -> { ws, retry, recreateAttempts, members, offline }
 
 function bufToBase64(buf) {
   const bytes = new Uint8Array(buf);
@@ -758,24 +780,27 @@ function base64ToBuf(b64) {
   return bytes.buffer;
 }
 
-function setShareState(text, offline = false, names = null) {
-  const el = $('shareState');
-  if (!text) { el.hidden = true; return; }
-  el.hidden = false;
-  el.textContent = text;
-  el.title = names ? '参加中: ' + names.join('、') : '';
-  el.classList.toggle('offline', offline);
+// エディタヘッダーのバッジ: 開いている文書のフォルダの接続状態を表示
+function applySyncUI() {
+  const ed = $('shareState');
+  if (views.editor.hidden || !state.doc || !state.doc.shareCode) { ed.hidden = true; return; }
+  const c = conns.get(state.doc.shareCode);
+  ed.hidden = false;
+  if (!c || c.offline) { ed.textContent = '共有 再接続中…'; ed.classList.add('offline'); }
+  else { ed.textContent = `● 共有中 ${c.members || 1}台`; ed.classList.remove('offline'); }
 }
 
-let pendingOps = []; // サーバーがACKを返すまで保持する操作(再接続時に再送)
+let pendingOps = []; // サーバーがACKを返すまで保持する操作(再接続時に再送)。各entryに code を持つ
 let opSeq = 0;
 
 function sendOp(page, op) {
   if (!state.doc || !state.doc.shareCode || !state.doc.remoteId) return;
-  const entry = { seq: ++opSeq, docId: state.doc.remoteId, page, op };
+  const code = state.doc.shareCode;
+  const entry = { seq: ++opSeq, code, docId: state.doc.remoteId, page, op };
   pendingOps.push(entry);
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'op', seq: entry.seq, docId: entry.docId, page, op }));
+  const c = conns.get(code);
+  if (c && c.ws && c.ws.readyState === WebSocket.OPEN) {
+    c.ws.send(JSON.stringify({ type: 'op', seq: entry.seq, docId: entry.docId, page, op }));
   }
 }
 function sendPageSet(page) {
@@ -863,38 +888,35 @@ async function deleteLocalDoc(shareCode, remoteId) {
   if (!views.home.hidden) renderHome();
 }
 
-/* ===== ライブラリ同期(全端末・常時接続) ===== */
-function libCode() { return localStorage.getItem('pdfnote_lib') || ''; }
-function setLibCode(code) {
-  if (code) localStorage.setItem('pdfnote_lib', code);
-  else localStorage.removeItem('pdfnote_lib');
+function libDocPayload(d) {
+  return { id: d.remoteId || d.id, name: d.name, category: d.category || '未分類', pdf: bufToBase64(d.pdfData), annotations: d.annotations };
 }
 
-let syncMembers = 0, syncOffline = false;
-function applySyncUI() {
-  const on = !!libCode();
-  const ed = $('shareState');
-  if (views.editor.hidden) { ed.hidden = true; }
-  else {
-    ed.hidden = !on;
-    ed.textContent = syncOffline ? '同期 再接続中…' : `● 同期中 ${syncMembers}台`;
-    ed.classList.toggle('offline', syncOffline);
-  }
-  const hs = $('homeSyncState');
-  if (hs) {
-    hs.textContent = on ? (syncOffline ? '🔄 再接続中…' : `📲 同期中 ${syncMembers}台`) : '';
-    hs.hidden = !on;
-  }
+// 共有中の全フォルダ(distinct shareCode)へ接続を維持。不要な接続は閉じる。
+async function ensureConnections() {
+  const docs = await dbAll();
+  const codes = new Set(docs.filter(d => d.shareCode && d.remoteId).map(d => d.shareCode));
+  for (const code of [...conns.keys()]) if (!codes.has(code)) closeConn(code);
+  for (const code of codes) if (!conns.has(code)) connectRoom(code);
 }
 
-// ライブラリ全体への常時接続。openEditor/戻る では切断しない。
-function connectShare() {
-  disconnectShare();
-  const code = libCode();
-  if (!code) { applySyncUI(); return; }
+function closeConn(code) {
+  const c = conns.get(code);
+  if (!c) return;
+  clearTimeout(c.retry);
+  if (c.ws) { const s = c.ws; c.ws = null; s.close(); }
+  conns.delete(code);
+}
+
+// 1つのフォルダ(code)への常時接続。openEditor/戻る では切断しない。
+function connectRoom(code) {
+  const existing = conns.get(code);
+  if (existing && existing.ws && existing.ws.readyState <= 1) return; // 接続済み
+  const c = conns.get(code) || { ws: null, retry: null, recreateAttempts: 0, members: 1, offline: true };
+  conns.set(code, c);
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const sock = new WebSocket(`${proto}://${location.host}/ws?code=${code}&name=${encodeURIComponent(getGuestName())}`);
-  ws = sock;
+  c.ws = sock;
 
   sock.onmessage = (e) => {
     let msg;
@@ -903,12 +925,10 @@ function connectShare() {
       const all = msg.annotations || {};
       const dn = msg.docNames || {};
       const del = msg.deleted || [];
-      // 未ACKの自分の操作を再送
-      for (const entry of pendingOps) {
+      for (const entry of pendingOps.filter(p => p.code === code)) {
         sock.send(JSON.stringify({ type: 'op', seq: entry.seq, docId: entry.docId, page: entry.page, op: entry.op }));
-        if (state.doc && entry.docId === state.doc.remoteId) applyRemoteOp(entry.page, entry.op);
+        if (state.doc && state.doc.shareCode === code && entry.docId === state.doc.remoteId) applyRemoteOp(entry.page, entry.op);
       }
-      // 全ローカル文書をサーバー状態に合わせる(注釈・名前・削除)
       (async () => {
         const all2 = await dbAll();
         for (const s of all2.filter(d => d.shareCode === code && d.remoteId)) {
@@ -922,24 +942,23 @@ function connectShare() {
           if (dn[s.remoteId] && dn[s.remoteId] !== s.name) { s.name = dn[s.remoteId]; dirty = true; }
           if (dirty) await dbPut(s);
         }
-        // 開いている文書を最新へ
-        if (state.doc && all[state.doc.remoteId]) {
+        if (state.doc && state.doc.shareCode === code && all[state.doc.remoteId]) {
           state.doc.annotations = all[state.doc.remoteId];
           state.pages.forEach(redrawOverlay);
         }
-        if (state.doc && dn[state.doc.remoteId] && dn[state.doc.remoteId] !== state.doc.name) {
+        if (state.doc && state.doc.shareCode === code && dn[state.doc.remoteId] && dn[state.doc.remoteId] !== state.doc.name) {
           state.doc.name = dn[state.doc.remoteId]; $('docTitle').textContent = state.doc.name;
         }
         if (!views.home.hidden) renderHome();
       })();
-      recreateAttempts = 0;
-      syncOffline = false; syncMembers = msg.members; applySyncUI();
+      c.recreateAttempts = 0; c.offline = false; c.members = msg.members;
+      applySyncUI();
     } else if (msg.type === 'ack') {
       pendingOps = pendingOps.filter(p => p.seq !== msg.seq);
     } else if (msg.type === 'members') {
-      syncMembers = msg.count; applySyncUI();
+      c.members = msg.count; applySyncUI(); if (!views.home.hidden) renderHome();
     } else if (msg.type === 'op') {
-      if (state.doc && msg.docId === state.doc.remoteId) applyRemoteOp(msg.page, msg.op);
+      if (state.doc && state.doc.shareCode === code && msg.docId === state.doc.remoteId) applyRemoteOp(msg.page, msg.op);
       else applyOpToDb(code, msg.docId, msg.page, msg.op);
     } else if (msg.type === 'doc:add') {
       receiveSharedDoc(code, msg.docId);
@@ -951,148 +970,145 @@ function connectShare() {
   };
 
   sock.onclose = (e) => {
-    if (ws !== sock) return; // 意図的な切断
-    ws = null;
-    if (!libCode()) { applySyncUI(); return; }
-    syncOffline = true; applySyncUI();
-    if (e.code === 4404 && recreateAttempts < 5) {
-      // サーバーからルームが消えている → 手元の全文書から復元
-      recreateAttempts++;
-      recreateLibRoom().then(() => { wsRetryTimer = setTimeout(connectShare, 800); });
+    if (c.ws !== sock) return; // 意図的な切断
+    c.ws = null; c.offline = true;
+    if (!conns.has(code)) return; // 共有解除済み
+    applySyncUI();
+    if (e.code === 4404 && c.recreateAttempts < 5) {
+      c.recreateAttempts++;
+      recreateRoom(code).then(() => { c.retry = setTimeout(() => connectRoom(code), 800); });
       return;
     }
-    wsRetryTimer = setTimeout(connectShare, 2500);
+    c.retry = setTimeout(() => connectRoom(code), 2500);
   };
   sock.onerror = () => sock.close();
 }
 
-// 消えたライブラリを手元の全文書から同じコードで再作成(自己修復)
-async function recreateLibRoom() {
-  const code = libCode();
-  if (!code) return false;
+// 消えたフォルダのルームを手元の文書から同じコードで再作成(自己修復)
+async function recreateRoom(code) {
   try {
     const docs = (await dbAll()).filter(d => d.shareCode === code && d.remoteId);
     if (!docs.length) return false;
+    const name = docs[0].category || '共有';
     const res = await fetch('/api/share', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, name: 'ライブラリ', docs: docs.map(libDocPayload) })
+      body: JSON.stringify({ code, name, docs: docs.map(libDocPayload) })
     });
     return res.ok;
-  } catch (err) { console.error('同期の復元に失敗:', err); return false; }
-}
-function libDocPayload(d) {
-  return { id: d.remoteId || d.id, name: d.name, category: d.category || '未分類', pdf: bufToBase64(d.pdfData), annotations: d.annotations };
+  } catch (err) { console.error('共有の復元に失敗:', err); return false; }
 }
 
-function disconnectShare() {
-  clearTimeout(wsRetryTimer);
-  if (ws) { const s = ws; ws = null; s.close(); }
-}
-
-// 1文書をライブラリに登録(取り込み時。サーバーに追加して全端末へ配信)
-async function addDocToLibrary(doc) {
-  const code = libCode();
-  if (!code) return;
-  doc.shareCode = code; doc.remoteId = doc.id;
-  await dbPut(doc);
+// 取り込んだ文書を、そのフォルダが共有中なら自動でルームに追加・配信
+async function addDocToFolderShare(doc) {
+  const code = doc.shareCode;
+  if (!code || !doc.remoteId) return;
   try {
     const res = await fetch(`/api/share/${code}/docs`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(libDocPayload(doc))
     });
-    if (res.status === 404) await recreateLibRoom();
+    if (res.status === 404) await recreateRoom(code);
   } catch (_) {}
 }
 
-// このデバイスで同期を開始(全文書をライブラリ化してコード発行)
-async function startLibrarySync() {
-  const docs = await dbAll();
-  showToast('同期を準備しています…');
+// フォルダ(タイトル)単位で共有を開始。1フォルダ = 1コード
+async function shareFolder(category) {
+  const docs = (await dbAll()).filter(d => (d.category || '未分類') === category);
+  if (!docs.length) throw new Error('文書がありません');
+  const already = docs.find(d => d.shareCode);
+  if (already) {
+    // 既に共有中: 未登録の文書だけ追加
+    for (const d of docs.filter(x => !x.shareCode)) {
+      d.shareCode = already.shareCode; d.remoteId = d.id; await dbPut(d);
+      await addDocToFolderShare(d);
+    }
+    ensureConnections();
+    return already.shareCode;
+  }
+  showToast('共有を準備しています…');
   const res = await fetch('/api/share', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: 'ライブラリ', docs: docs.map(d => ({ ...libDocPayload(d), id: d.id })) })
+    body: JSON.stringify({ name: category, docs: docs.map(d => ({ ...libDocPayload(d), id: d.id })) })
   });
-  if (!res.ok) throw new Error('sync start failed: ' + res.status);
+  if (!res.ok) throw new Error('share failed: ' + res.status);
   const { code } = await res.json();
   for (const d of docs) { d.shareCode = code; d.remoteId = d.id; await dbPut(d); }
-  setLibCode(code);
-  connectShare();
+  ensureConnections();
   renderHome();
   return code;
 }
 
-// 他端末のコードで同期に参加(相手の文書を受信＋自分の文書も登録)
-async function joinLibrarySync(codeInput) {
+// コードでフォルダ共有に参加(相手の文書を受信し、そのフォルダに入れる)
+async function joinFolder(codeInput) {
   const code = (codeInput || '').trim().toUpperCase();
   if (!/^[A-Z0-9]{6}$/.test(code)) { showToast('6桁のコードを入力してください'); return; }
-  showToast('同期に参加しています…');
+  showToast('共有フォルダを取得しています…');
   const res = await fetch('/api/share/' + code);
   if (!res.ok) { showToast('コードが見つかりません'); return; }
   const data = await res.json();
   const local = await dbAll();
-  // 相手の文書を受信
+  const folderName = data.name || '共有';
+  let added = 0;
   for (const rd of data.docs) {
-    if (local.some(d => d.remoteId === rd.id)) continue;
+    if (local.some(d => d.remoteId === rd.id && d.shareCode === code)) continue;
     const pdfData = base64ToBuf(rd.pdf);
     const pdf = await pdfjsLib.getDocument({ data: pdfData.slice(0) }).promise;
     await dbPut({
       id: 'doc_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
-      name: rd.name, category: rd.category || '未分類', pdfData,
+      name: rd.name, category: rd.category || folderName, pdfData,
       annotations: rd.annotations || {}, pageCount: pdf.numPages,
       shareCode: code, remoteId: rd.id, updatedAt: Date.now()
     });
     await pdf.destroy();
+    added++;
   }
-  setLibCode(code);
-  // 自分の既存文書もライブラリに登録(相手にも配信)
-  for (const d of local) {
-    if (d.shareCode === code) continue;
-    await addDocToLibrary(d);
-  }
-  connectShare();
-  showToast(`同期に参加しました(${data.docs.length}件受信)`);
+  ensureConnections();
+  showToast(added ? `共有フォルダ「${folderName}」に参加しました(${added}件)` : 'すでに参加済みです');
   renderHome();
 }
 
-function stopLibrarySync() {
-  setLibCode('');
-  disconnectShare();
-  syncMembers = 0; syncOffline = false;
-  applySyncUI();
-  showToast('この端末の同期を解除しました(文書は残ります)');
+// フォルダの共有を解除(この端末だけ。文書は残す)
+async function unshareFolder(category) {
+  const docs = (await dbAll()).filter(d => (d.category || '未分類') === category && d.shareCode);
+  const codes = new Set(docs.map(d => d.shareCode));
+  for (const d of docs) { delete d.shareCode; delete d.remoteId; await dbPut(d); }
+  for (const code of codes) closeConn(code);
+  renderHome();
+  showToast('このフォルダの共有を解除しました(文書は残ります)');
 }
 
-/* ---- 同期ダイアログ ---- */
-function showSyncDialog() {
-  const on = !!libCode();
-  $('syncOnView').hidden = !on;
-  $('syncOffView').hidden = on;
-  if (on) $('syncCodeDisplay').textContent = libCode();
-  $('syncDialog').hidden = false;
+/* ---- 共有コードダイアログ ---- */
+let dialogCategory = null;
+function showShareDialog(code, category) {
+  dialogCategory = category;
+  $('shareCodeDisplay').textContent = code;
+  $('shareDialog').hidden = false;
 }
-$('syncCloseBtn').addEventListener('click', () => { $('syncDialog').hidden = true; });
-$('syncCopyBtn').addEventListener('click', async () => {
-  try { await navigator.clipboard.writeText(libCode()); showToast('コードをコピーしました'); }
+$('shareCloseBtn').addEventListener('click', () => { $('shareDialog').hidden = true; });
+$('shareCopyBtn').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText($('shareCodeDisplay').textContent); showToast('コードをコピーしました'); }
   catch { showToast('コピーできませんでした'); }
 });
-$('syncStartBtn').addEventListener('click', async () => {
-  $('syncDialog').hidden = true;
-  try { const code = await startLibrarySync(); showSyncDialog(); $('syncCodeDisplay').textContent = code; }
-  catch (err) { console.error(err); showToast('同期サーバーに接続できません'); }
-});
-$('syncJoinBtn').addEventListener('click', () => {
-  const code = prompt('相手のコードを入力(6桁)');
-  $('syncDialog').hidden = true;
-  if (code) joinLibrarySync(code).catch(err => { console.error(err); showToast('参加に失敗しました'); });
-});
-$('syncStopBtn').addEventListener('click', () => {
-  $('syncDialog').hidden = true;
-  if (confirm('この端末の同期を解除しますか？(端末内の文書はそのまま残ります)')) stopLibrarySync();
+$('shareStopBtn').addEventListener('click', () => {
+  $('shareDialog').hidden = true;
+  if (dialogCategory && confirm('このフォルダの共有を解除しますか？')) unshareFolder(dialogCategory);
 });
 
-$('syncBtn').addEventListener('click', showSyncDialog);   // ホームの「📲 同期」
-$('liveBtn').addEventListener('click', showSyncDialog);   // エディタの 🔗
-$('homeSyncState').addEventListener('click', showSyncDialog);
+// エディタの🔗: 今開いている文書のフォルダを共有/コード表示
+$('liveBtn').addEventListener('click', async () => {
+  if (!state.doc) return;
+  const cat = state.doc.category || '未分類';
+  try {
+    if (state.doc.shareCode) { showShareDialog(state.doc.shareCode, cat); }
+    else { const code = await shareFolder(cat); showShareDialog(code, cat); applySyncUI(); }
+  } catch (err) { console.error(err); showToast('共有サーバーに接続できません'); }
+});
+
+// ホームの「コードで参加」
+$('joinBtn').addEventListener('click', () => {
+  const code = prompt('共有コードを入力(6桁)');
+  if (code) joinFolder(code).catch(err => { console.error(err); showToast('参加に失敗しました'); });
+});
 
 /* ================= PWA ================= */
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
@@ -1100,7 +1116,7 @@ if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.
 }
 
 /* テスト用フック */
-window.__app = { importPdf, openEditor, renderHome, state, dbAll, exportAnnotatedPdf, startLibrarySync, joinLibrarySync, libCode, addDocToLibrary };
+window.__app = { importPdf, openEditor, renderHome, state, dbAll, exportAnnotatedPdf, shareFolder, joinFolder, unshareFolder, conns };
 
 /* ================= 起動 ================= */
 function hideSplash() {
@@ -1118,7 +1134,7 @@ Promise.resolve(renderHome()).finally(() => {
 });
 // 念のための保険(何かで止まっても3秒で必ず消す)
 setTimeout(hideSplash, 3000);
-// ライブラリ同期が有効なら常時接続を開始
-if (libCode()) connectShare();
+// 共有中の各フォルダへ常時接続を開始
+ensureConnections();
 // 接続が落ちていたら定期的に張り直す(保険)
-setInterval(() => { if (libCode() && (!ws || ws.readyState > 1)) connectShare(); }, 8000);
+setInterval(ensureConnections, 8000);
