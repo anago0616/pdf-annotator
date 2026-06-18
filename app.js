@@ -43,8 +43,28 @@ const state = {
   undoStack: [],    // {page, snapshot}
   pages: [],        // {wrap, canvas, overlay, viewport, num}
   editingText: null, // {page, index} 編集中テキスト / {page, x, y} 新規
+  selectedText: null, // {page, index} 選択中テキスト(移動・リサイズ用)
   pinching: false   // 2本指ピンチ操作中
 };
+
+// テキスト寸法の測定用(ページ座標系)
+const _measureCtx = document.createElement('canvas').getContext('2d');
+function textMetrics(t) {
+  _measureCtx.font = `${t.size}px -apple-system, "Hiragino Sans", "Yu Gothic UI", sans-serif`;
+  const lines = t.text.split('\n');
+  let w = 1;
+  for (const l of lines) w = Math.max(w, _measureCtx.measureText(l).width);
+  return { w, h: lines.length * t.size * 1.3, lines };
+}
+// テキストのヒット判定(ページ座標)。当たったindex、なければ -1
+function hitText(ann, x, y) {
+  for (let i = ann.texts.length - 1; i >= 0; i--) {
+    const t = ann.texts[i];
+    const m = textMetrics(t);
+    if (x >= t.x && x <= t.x + m.w && y >= t.y && y <= t.y + m.h) return i;
+  }
+  return -1;
+}
 
 const $ = (id) => document.getElementById(id);
 const views = { home: $('homeView'), editor: $('editorView') };
@@ -261,6 +281,7 @@ async function openEditor(id) {
   state.doc = doc;
   state.zoom = 1;
   state.undoStack = [];
+  state.selectedText = null;
   $('docTitle').textContent = doc.name;
   $('saveStatus').textContent = '';
   views.home.hidden = true;
@@ -385,13 +406,33 @@ function redrawOverlay(info) {
   const ctx = info.overlay.getContext('2d');
   ctx.clearRect(0, 0, info.overlay.width, info.overlay.height);
   const ann = pageAnn(state.doc, info.num);
-  drawAnnotations(ctx, ann, info.scale * info.dpr);
+  const factor = info.scale * info.dpr;
+  drawAnnotations(ctx, ann, factor);
+  // 選択中テキストの枠+リサイズハンドル
+  const sel = state.selectedText;
+  if (state.tool === 'text' && sel && sel.page === info.num && ann.texts[sel.index]) {
+    const t = ann.texts[sel.index];
+    const m = textMetrics(t);
+    const pad = 4;
+    ctx.save();
+    ctx.strokeStyle = '#1a73e8';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 4]);
+    ctx.strokeRect(t.x * factor - pad, t.y * factor - pad, m.w * factor + pad * 2, m.h * factor + pad * 2);
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#1a73e8';
+    ctx.beginPath();
+    ctx.arc((t.x + m.w) * factor + pad, (t.y + m.h) * factor + pad, 8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
 }
 
 /* ---- ポインタ操作 ---- */
 function attachPointerHandlers(info) {
   const ov = info.overlay;
   let stroke = null;
+  let textAction = null; // {mode:'move'|'resize', index, ...}
 
   const toPageCoords = (e) => {
     const r = ov.getBoundingClientRect();
@@ -426,13 +467,59 @@ function attachPointerHandlers(info) {
       pushUndo(info.num);
       eraseAt(info, x, y);
     } else if (state.tool === 'text') {
-      handleTextTap(info, x, y);
+      const ann = pageAnn(state.doc, info.num);
+      const sel = state.selectedText;
+      // 1) 選択中テキストの右下ハンドル → リサイズ開始
+      if (sel && sel.page === info.num && ann.texts[sel.index]) {
+        const t = ann.texts[sel.index];
+        const m = textMetrics(t);
+        const hs = 18 / info.scale; // ハンドル当たり判定(ページ単位)
+        if (Math.abs(x - (t.x + m.w)) < hs && Math.abs(y - (t.y + m.h)) < hs) {
+          pushUndo(info.num);
+          textAction = { mode: 'resize', index: sel.index, origSize: t.size, origW: m.w };
+          try { ov.setPointerCapture(e.pointerId); } catch (_) {}
+          return;
+        }
+      }
+      // 2) テキスト本体 → 選択して移動開始(離した時にタップ判定で編集)
+      const idx = hitText(ann, x, y);
+      if (idx >= 0) {
+        const wasSel = sel && sel.page === info.num && sel.index === idx;
+        state.selectedText = { page: info.num, index: idx };
+        const t = ann.texts[idx];
+        pushUndo(info.num);
+        textAction = { mode: 'move', index: idx, startX: x, startY: y, origX: t.x, origY: t.y, moved: false, wasSel };
+        try { ov.setPointerCapture(e.pointerId); } catch (_) {}
+        redrawOverlay(info);
+        return;
+      }
+      // 3) 空白 → 選択解除、なければ新規テキスト作成
+      if (state.selectedText) { state.selectedText = null; redrawOverlay(info); }
+      else openNewTextEditor(info, x, y);
     }
   });
 
   ov.addEventListener('pointermove', (e) => {
     if (state.tool === 'hand') return;
-    if (state.pinching) { stroke = null; return; }
+    if (state.pinching) { stroke = null; textAction = null; return; }
+    if (textAction) {
+      const [x, y] = toPageCoords(e);
+      const ann = pageAnn(state.doc, info.num);
+      const t = ann.texts[textAction.index];
+      if (!t) { textAction = null; return; }
+      if (textAction.mode === 'move') {
+        const dx = x - textAction.startX, dy = y - textAction.startY;
+        if (Math.hypot(dx, dy) > 3 / info.scale) textAction.moved = true;
+        t.x = textAction.origX + dx;
+        t.y = textAction.origY + dy;
+      } else {
+        const newW = Math.max(8 / info.scale, x - t.x);
+        const ratio = newW / Math.max(1, textAction.origW);
+        t.size = Math.max(8, Math.min(400, Math.round(textAction.origSize * ratio)));
+      }
+      redrawOverlay(info);
+      return;
+    }
     if (stroke) {
       const [x, y] = toPageCoords(e);
       const last = stroke.points[stroke.points.length - 1];
@@ -447,6 +534,19 @@ function attachPointerHandlers(info) {
   });
 
   const finish = () => {
+    if (textAction) {
+      const ta = textAction;
+      textAction = null;
+      if (ta.mode === 'move' && !ta.moved) {
+        // 移動せずタップ: 既に選択済みだった文字なら編集を開く
+        state.undoStack.pop(); // 何も変えていない
+        if (ta.wasSel) openTextEditorFor(info, ta.index);
+      } else {
+        scheduleSave();
+        sendPageSet(info.num);
+      }
+      return;
+    }
     if (stroke) {
       const committed = stroke;
       stroke = null;
@@ -482,24 +582,17 @@ function eraseAt(info, x, y) {
 }
 
 /* ---- テキスト ---- */
-function handleTextTap(info, x, y) {
-  const ann = pageAnn(state.doc, info.num);
-  // 既存テキストをタップしたら編集
-  const idx = ann.texts.findIndex(t => {
-    const lines = t.text.split('\n');
-    const h = lines.length * t.size * 1.3;
-    const w = Math.max(...lines.map(l => l.length)) * t.size;
-    return x >= t.x && x <= t.x + w && y >= t.y && y <= t.y + h;
-  });
-  if (idx >= 0) {
-    state.editingText = { page: info.num, index: idx };
-    $('textInput').value = ann.texts[idx].text;
-    $('textDeleteBtn').hidden = false;
-  } else {
-    state.editingText = { page: info.num, x, y };
-    $('textInput').value = '';
-    $('textDeleteBtn').hidden = true;
-  }
+function openTextEditorFor(info, idx) {
+  state.editingText = { page: info.num, index: idx };
+  $('textInput').value = pageAnn(state.doc, info.num).texts[idx].text;
+  $('textDeleteBtn').hidden = false;
+  $('textEditor').hidden = false;
+  $('textInput').focus();
+}
+function openNewTextEditor(info, x, y) {
+  state.editingText = { page: info.num, x, y };
+  $('textInput').value = '';
+  $('textDeleteBtn').hidden = true;
   $('textEditor').hidden = false;
   $('textInput').focus();
 }
@@ -516,10 +609,11 @@ $('textOkBtn').addEventListener('click', () => {
   const ann = pageAnn(state.doc, et.page);
   pushUndo(et.page);
   if (et.index != null) {
-    if (text) ann.texts[et.index].text = text;
-    else ann.texts.splice(et.index, 1);
+    if (text) { ann.texts[et.index].text = text; state.selectedText = { page: et.page, index: et.index }; }
+    else { ann.texts.splice(et.index, 1); state.selectedText = null; }
   } else if (text) {
     ann.texts.push({ x: et.x, y: et.y, text, color: state.color, size: Math.max(10, state.width * 4) });
+    state.selectedText = { page: et.page, index: ann.texts.length - 1 }; // 作成直後は選択(すぐ移動・リサイズ可)
   }
   const info = state.pages.find(p => p.num === et.page);
   if (info) redrawOverlay(info);
@@ -533,6 +627,7 @@ $('textDeleteBtn').addEventListener('click', () => {
   if (et && et.index != null) {
     pushUndo(et.page);
     pageAnn(state.doc, et.page).texts.splice(et.index, 1);
+    state.selectedText = null;
     const info = state.pages.find(p => p.num === et.page);
     if (info) redrawOverlay(info);
     scheduleSave();
@@ -574,6 +669,12 @@ function setTool(tool) {
   document.querySelectorAll('.tool-btn[data-tool]').forEach(b =>
     b.classList.toggle('active', b.dataset.tool === tool));
   updateOverlayInteractivity();
+  // テキスト以外に切り替えたら選択枠を消す
+  if (tool !== 'text' && state.selectedText) {
+    const sel = state.selectedText; state.selectedText = null;
+    const info = state.pages.find(p => p.num === sel.page);
+    if (info) redrawOverlay(info);
+  }
 }
 document.querySelectorAll('.tool-btn[data-tool]').forEach(b =>
   b.addEventListener('click', () => setTool(b.dataset.tool)));
