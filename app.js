@@ -322,6 +322,7 @@ async function openEditor(id) {
   state.zoom = 1;
   state.undoStack = [];
   state.selectedText = null;
+  resetGestureState(); // 別ファイルを開くたびにジェスチャ状態をクリア(固まり対策)
   $('docTitle').textContent = doc.name;
   $('saveStatus').textContent = '';
   views.home.hidden = true;
@@ -506,7 +507,7 @@ function attachPointerHandlers(info) {
   };
 
   ov.addEventListener('pointerdown', (e) => {
-    if (state.tool === 'hand' || state.pinching || e.pointerType === 'touch' && activeTouchCount() >= 2) return;
+    if (gestureBlocksDraw(e)) return;
     e.preventDefault();
     if (state.tool !== 'text') {
       try { ov.setPointerCapture(e.pointerId); } catch (_) {}
@@ -786,6 +787,7 @@ function scheduleSave() {
 /* ---- ツール / 色 / 太さ ---- */
 function setTool(tool) {
   state.tool = tool;
+  resetGestureState(); // ツール切替時にジェスチャ残骸をクリア
   document.querySelectorAll('.tool-btn[data-tool]').forEach(b =>
     b.classList.toggle('active', b.dataset.tool === tool));
   updateOverlayInteractivity();
@@ -844,6 +846,19 @@ function activeTouchCount() {
   const now = Date.now();
   for (const [id, ts] of touchPts) if (now - ts > 5000) touchPts.delete(id);
   return touchPts.size;
+}
+
+// ジェスチャ状態を完全にリセット(固まり防止の総合対策)
+function resetGestureState() {
+  touchPts.clear();
+  state.pinching = false;
+}
+
+// 描画/テキスト入力をブロックすべきか(2本指ピンチ等)。残骸は自己修復する。
+function gestureBlocksDraw(e) {
+  const n = activeTouchCount(); // 古い指は掃除される
+  if (state.pinching && n < 2) state.pinching = false; // ピンチ残骸の自己修復
+  return state.tool === 'hand' || state.pinching || (e.pointerType === 'touch' && n >= 2);
 }
 
 function setupPinchZoom() {
@@ -1452,6 +1467,11 @@ function hideSplash() {
 }
 
 setupPinchZoom();
+// アプリが前面に復帰/再表示されたら固まり状態を解除
+// (iOSはPWAを再読込せず復帰するため、落として開き直しても残骸が残ることがある)
+document.addEventListener('visibilitychange', () => { if (!document.hidden) resetGestureState(); });
+window.addEventListener('focus', resetGestureState);
+window.addEventListener('pageshow', resetGestureState);
 const splashStart = Date.now();
 Promise.resolve(renderHome()).finally(() => {
   // 最低0.7秒は表示してチラつきを防ぐ
