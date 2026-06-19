@@ -339,6 +339,7 @@ html, body {
   border-radius: 12px; padding: 7px 9px;
   box-shadow: 0 4px 18px rgba(0,0,0,.22); z-index: 18;
 }
+.text-toolbar[hidden] { display: none; } /* テキスト選択中のみ表示(display:flexがhidden属性を上書きするのを防ぐ) */
 .tt-colors { display: flex; gap: 5px; }
 .tt-color {
   width: 24px; height: 24px; border-radius: 50%; border: 2px solid transparent;
