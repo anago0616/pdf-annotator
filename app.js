@@ -120,6 +120,7 @@ function updateBulkBar() {
 async function renderHome() {
   views.editor.hidden = true;
   views.home.hidden = false;
+  document.body.classList.remove('editing'); // ホームではブラウザズームを許可
   $('selectBtn').textContent = selectMode ? '✕ 解除' : '☑ 選択';
   $('addBtn').style.display = selectMode ? 'none' : '';
   updateBulkBar();
@@ -327,6 +328,7 @@ async function openEditor(id) {
   $('saveStatus').textContent = '';
   views.home.hidden = true;
   views.editor.hidden = false;
+  document.body.classList.add('editing'); // 編集中はブラウザズームを無効化
   updateTextToolbar();
   // ライブラリ同期は常時接続なので個別接続はしない。状態表示のみ更新。
   applySyncUI();
@@ -1473,13 +1475,14 @@ function hideSplash() {
 }
 
 setupPinchZoom();
-// ブラウザのズーム(UIごと拡大される)を無効化。PDFのズームはアプリ内のボタン/ピンチで行う。
-window.addEventListener('wheel', (e) => { if (e.ctrlKey) e.preventDefault(); }, { passive: false });
+// 編集画面でだけブラウザのズーム(UIごと拡大される)を無効化。ホーム一覧では通常ズーム可。
+const inEditor = () => !views.editor.hidden;
+window.addEventListener('wheel', (e) => { if (e.ctrlKey && inEditor()) e.preventDefault(); }, { passive: false });
 window.addEventListener('keydown', (e) => {
   // 拡大/縮小は止めるが、Ctrl+0(100%に戻す)は残す
-  if ((e.ctrlKey || e.metaKey) && ['+', '-', '='].includes(e.key)) e.preventDefault();
+  if ((e.ctrlKey || e.metaKey) && ['+', '-', '='].includes(e.key) && inEditor()) e.preventDefault();
 });
-document.addEventListener('gesturestart', (e) => e.preventDefault()); // Safari のピンチズーム抑止
+document.addEventListener('gesturestart', (e) => { if (inEditor()) e.preventDefault(); }); // Safari のピンチズーム抑止
 // アプリが前面に復帰/再表示されたら固まり状態を解除
 // (iOSはPWAを再読込せず復帰するため、落として開き直しても残骸が残ることがある)
 document.addEventListener('visibilitychange', () => { if (!document.hidden) resetGestureState(); });

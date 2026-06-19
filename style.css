@@ -75,8 +75,9 @@ html, body {
   background: var(--bg);
   color: var(--text);
   overscroll-behavior: none;
-  touch-action: pan-x pan-y; /* ブラウザのピンチズーム(UIごと拡大)を無効化。PDFのズームはアプリが処理 */
 }
+/* 編集画面でだけブラウザのピンチズーム(UIごと拡大)を無効化。ホーム一覧では通常ズーム可 */
+body.editing { touch-action: pan-x pan-y; }
 
 .view { position: fixed; inset: 0; display: flex; flex-direction: column; }
 .view[hidden] { display: none; }
