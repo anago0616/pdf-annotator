@@ -1202,7 +1202,11 @@ async function ensureConnections() {
   const docs = await dbAll();
   const codes = new Set(docs.filter(d => d.shareCode && d.remoteId).map(d => d.shareCode));
   for (const code of [...conns.keys()]) if (!codes.has(code)) closeConn(code);
-  for (const code of codes) if (!conns.has(code)) connectRoom(code);
+  for (const code of codes) {
+    const c = conns.get(code);
+    // WS が存在しないか既に閉じている場合は再接続(デプロイ後のデッドロック防止)
+    if (!c || !c.ws || c.ws.readyState > 1) connectRoom(code);
+  }
 }
 
 function closeConn(code) {
@@ -1295,13 +1299,19 @@ function connectRoom(code) {
 
 // 消えたフォルダのルームを手元の文書から同じコードで再作成(自己修復)
 // 大きいPDFや多数の文書でも通るよう、1件ずつ分割アップロードする
+function fetchWithTimeout(url, opts, ms = 15000) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  return fetch(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(t));
+}
+
 async function recreateRoom(code) {
   try {
     const docs = (await dbAll()).filter(d => d.shareCode === code && d.remoteId);
     if (!docs.length) return false;
     const name = docs[0].category || '共有';
     // まず1文書だけでルーム作成(巨大な単一リクエストを避ける)
-    const first = await fetch('/api/share', {
+    const first = await fetchWithTimeout('/api/share', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code, name, docs: [libDocPayload(docs[0])] })
     });
@@ -1309,7 +1319,7 @@ async function recreateRoom(code) {
     // 残りは1件ずつ追加(1件失敗しても続行)
     for (const d of docs.slice(1)) {
       try {
-        await fetch(`/api/share/${code}/docs`, {
+        await fetchWithTimeout(`/api/share/${code}/docs`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(libDocPayload(d))
         });
