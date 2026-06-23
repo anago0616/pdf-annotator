@@ -1,5 +1,11 @@
 'use strict';
 
+// このデバイス固有ID。自分が作成した注釈にのみ付与し、他端末の注釈は編集不可にする
+const MY_ID = (() => {
+  const k = 'pdfnote_did';
+  return localStorage.getItem(k) || (() => { const v = Math.random().toString(36).slice(2, 10); localStorage.setItem(k, v); return v; })();
+})();
+
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
@@ -520,7 +526,7 @@ function attachPointerHandlers(info) {
 
     if (state.tool === 'pen' || state.tool === 'marker') {
       pushUndo(info.num);
-      stroke = { tool: state.tool, color: state.color, width: state.width, points: [[x, y]] };
+      stroke = { tool: state.tool, color: state.color, width: state.width, points: [[x, y]], owner: MY_ID };
       pageAnn(state.doc, info.num).strokes.push(stroke);
       redrawOverlay(info);
     } else if (state.tool === 'eraser') {
@@ -541,12 +547,13 @@ function attachPointerHandlers(info) {
           return;
         }
       }
-      // 2) テキスト本体 → 選択して移動開始(離した時にタップ判定で編集)
+      // 2) テキスト本体 → 自分のものだけ選択・移動(他端末のは無視)
       const idx = hitText(ann, x, y);
       if (idx >= 0) {
+        const t = ann.texts[idx];
+        if (t.owner && t.owner !== MY_ID) return; // 他端末のテキスト → 触れない
         const wasSel = sel && sel.page === info.num && sel.index === idx;
         state.selectedText = { page: info.num, index: idx };
-        const t = ann.texts[idx];
         pushUndo(info.num);
         textAction = { mode: 'move', index: idx, startX: x, startY: y, origX: t.x, origY: t.y, moved: false, wasSel };
         try { ov.setPointerCapture(e.pointerId); } catch (_) {}
@@ -633,8 +640,10 @@ function eraseAt(info, x, y) {
   const ann = pageAnn(state.doc, info.num);
   const radius = 12 / state.zoom;
   const before = ann.strokes.length + ann.texts.length;
-  ann.strokes = ann.strokes.filter(s => !s.points.some(p => Math.hypot(p[0] - x, p[1] - y) < radius));
+  const isMine = o => !o.owner || o.owner === MY_ID;
+  ann.strokes = ann.strokes.filter(s => !isMine(s) || !s.points.some(p => Math.hypot(p[0] - x, p[1] - y) < radius));
   ann.texts = ann.texts.filter(t => {
+    if (!isMine(t)) return true;
     const lines = t.text.split('\n');
     const h = lines.length * t.size * 1.3;
     const w = Math.max(...lines.map(l => l.length)) * t.size;
@@ -674,7 +683,7 @@ $('textOkBtn').addEventListener('click', () => {
     if (text) { ann.texts[et.index].text = text; state.selectedText = { page: et.page, index: et.index }; }
     else { ann.texts.splice(et.index, 1); state.selectedText = null; }
   } else if (text) {
-    ann.texts.push({ x: et.x, y: et.y, text, color: state.color, size: Math.max(10, state.width * 4) });
+    ann.texts.push({ x: et.x, y: et.y, text, color: state.color, size: Math.max(10, state.width * 4), owner: MY_ID });
     state.selectedText = { page: et.page, index: ann.texts.length - 1 }; // 作成直後は選択(すぐ移動・リサイズ可)
   }
   const info = state.pages.find(p => p.num === et.page);
