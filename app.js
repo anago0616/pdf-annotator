@@ -1293,18 +1293,32 @@ function connectRoom(code) {
     c.ws = null; c.offline = true;
     if (!conns.has(code)) return; // 共有解除済み
     applySyncUI();
+
+    // Renderのプロキシは独自WSクローズコード(4404)を1006に書き換えるため、
+    // クローズコードに頼らず HTTP でルームの存在を確認してから対応を決める
+    const handleClose = (roomMissing) => {
+      if (!conns.has(code)) return;
+      if (roomMissing) {
+        c.recreateAttempts = (c.recreateAttempts || 0) + 1;
+        const backoff = Math.min(15000, 1500 * c.recreateAttempts);
+        c.recreating = true;
+        recreateRoom(code).then((ok) => {
+          c.recreating = false;
+          c.retry = setTimeout(() => connectRoom(code), ok ? 600 : backoff);
+        });
+      } else {
+        c.retry = setTimeout(() => connectRoom(code), 2500);
+      }
+    };
+
     if (e.code === 4404) {
-      // サーバーからルームが消えている → 復元を試みて再接続(成功するまで諦めない)
-      c.recreateAttempts = (c.recreateAttempts || 0) + 1;
-      const backoff = Math.min(15000, 1500 * c.recreateAttempts);
-      c.recreating = true; // 復元中フラグ: ensureConnectionsが同時に接続を試みないようにする
-      recreateRoom(code).then((ok) => {
-        c.recreating = false;
-        c.retry = setTimeout(() => connectRoom(code), ok ? 600 : backoff);
-      });
+      handleClose(true);
       return;
     }
-    c.retry = setTimeout(() => connectRoom(code), 2500);
+    // 4404以外(Renderが1006に変換した場合を含む): HTTPでルーム存在確認
+    fetch('/api/share/' + code + '/meta')
+      .then(r => handleClose(r.status === 404))
+      .catch(() => handleClose(false)); // サーバー起動中など → 通常リトライ
   };
   sock.onerror = () => sock.close();
 }
