@@ -367,13 +367,15 @@ async function renderAllPages() {
     const scale = state.baseScale * state.zoom;
     const vp = page.getViewport({ scale });
 
-    // 実効解像度: 低〜中倍率では画質優先、高倍率では上限優先
+    // 実効解像度: 端末の上限(面積・1辺)を絶対に超えないようにしつつ、できるだけ高精細に
+    const hardCap = Math.min(
+      Math.sqrt(MAX_AREA / (vp.width * vp.height)),
+      MAX_DIM / vp.width,
+      MAX_DIM / vp.height
+    );
     let dpr = baseDpr * OVERSAMPLE;
-    const maxDprForArea = Math.sqrt(MAX_AREA / (vp.width * vp.height));
-    const maxDprForDim = Math.min(MAX_DIM / vp.width, MAX_DIM / vp.height);
-    dpr = Math.min(dpr, maxDprForArea, maxDprForDim);
-    // 低倍率(4倍未満)では画質を保つ。高倍率では上限を優先する(ぼやけるがクラッシュ防止)
-    if (state.zoom < 4) { dpr = Math.max(baseDpr, dpr); } else { dpr = Math.max(1, dpr); }
+    if (state.zoom < 4) dpr = Math.max(baseDpr, dpr); // 低〜中倍率は端末DPR以上を確保(鮮明)
+    dpr = Math.min(dpr, hardCap); // 上限は最後に必ず適用(超倍率では1未満まで下げてブランク/ぼやけを防ぐ)
 
     const wrap = document.createElement('div');
     wrap.className = 'page-wrap';
@@ -827,7 +829,7 @@ $('widthSlider').addEventListener('input', (e) => {
 });
 
 /* ---- ズーム ---- */
-const ZOOM_MIN = 0.5, ZOOM_MAX = 8; // 画質優先: 高倍率でも解像度を保つため上限は8倍に
+const ZOOM_MIN = 0.5, ZOOM_MAX = 16; // 最大16倍(高倍率は端末上限内に自動調整)
 $('zoomInBtn').addEventListener('click', () => changeZoom(1.25));
 $('zoomOutBtn').addEventListener('click', () => changeZoom(0.8));
 
