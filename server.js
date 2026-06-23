@@ -111,7 +111,7 @@ function readBody(req, limit = 80 * 1024 * 1024) {
 }
 
 function sendJson(res, status, obj) {
-  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify(obj));
 }
 

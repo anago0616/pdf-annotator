@@ -1298,12 +1298,19 @@ function connectRoom(code) {
     // クローズコードに頼らず HTTP でルームの存在を確認してから対応を決める
     const handleClose = (roomMissing) => {
       if (!conns.has(code)) return;
+      if (c.recreating) { return; } // 既に復元中なら重複起動しない
       if (roomMissing) {
         c.recreateAttempts = (c.recreateAttempts || 0) + 1;
         const backoff = Math.min(15000, 1500 * c.recreateAttempts);
         c.recreating = true;
+        showToast('共有ルームを復元中…');
         recreateRoom(code).then((ok) => {
           c.recreating = false;
+          if (ok) {
+            showToast('復元完了、再接続します…');
+          } else {
+            showToast('復元失敗(' + c.recreateAttempts + '回目)、リトライします…');
+          }
           c.retry = setTimeout(() => connectRoom(code), ok ? 600 : backoff);
         });
       } else {
@@ -1316,7 +1323,8 @@ function connectRoom(code) {
       return;
     }
     // 4404以外(Renderが1006に変換した場合を含む): HTTPでルーム存在確認
-    fetch('/api/share/' + code + '/meta')
+    // cache:'no-store'でブラウザキャッシュを無効化(古い200を掴まないように)
+    fetch('/api/share/' + code + '/meta', { cache: 'no-store' })
       .then(r => handleClose(r.status === 404))
       .catch(() => handleClose(false)); // サーバー起動中など → 通常リトライ
   };
