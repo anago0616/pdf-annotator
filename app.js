@@ -1213,6 +1213,7 @@ async function ensureConnections() {
   for (const code of [...conns.keys()]) if (!codes.has(code)) closeConn(code);
   for (const code of codes) {
     const c = conns.get(code);
+    if (c && c.recreating) continue; // recreateRoom進行中は干渉しない
     // WS が存在しないか既に閉じている場合は再接続(デプロイ後のデッドロック防止)
     if (!c || !c.ws || c.ws.readyState > 1) connectRoom(code);
   }
@@ -1295,8 +1296,10 @@ function connectRoom(code) {
     if (e.code === 4404) {
       // サーバーからルームが消えている → 復元を試みて再接続(成功するまで諦めない)
       c.recreateAttempts = (c.recreateAttempts || 0) + 1;
-      const backoff = Math.min(15000, 1500 * c.recreateAttempts); // 失敗時は徐々に間隔を空ける(最大15秒)
+      const backoff = Math.min(15000, 1500 * c.recreateAttempts);
+      c.recreating = true; // 復元中フラグ: ensureConnectionsが同時に接続を試みないようにする
       recreateRoom(code).then((ok) => {
+        c.recreating = false;
         c.retry = setTimeout(() => connectRoom(code), ok ? 600 : backoff);
       });
       return;
@@ -1308,19 +1311,13 @@ function connectRoom(code) {
 
 // 消えたフォルダのルームを手元の文書から同じコードで再作成(自己修復)
 // 大きいPDFや多数の文書でも通るよう、1件ずつ分割アップロードする
-function fetchWithTimeout(url, opts, ms = 15000) {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), ms);
-  return fetch(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(t));
-}
-
 async function recreateRoom(code) {
   try {
     const docs = (await dbAll()).filter(d => d.shareCode === code && d.remoteId);
     if (!docs.length) return false;
     const name = docs[0].category || '共有';
     // まず1文書だけでルーム作成(巨大な単一リクエストを避ける)
-    const first = await fetchWithTimeout('/api/share', {
+    const first = await fetch('/api/share', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code, name, docs: [libDocPayload(docs[0])] })
     });
@@ -1328,7 +1325,7 @@ async function recreateRoom(code) {
     // 残りは1件ずつ追加(1件失敗しても続行)
     for (const d of docs.slice(1)) {
       try {
-        await fetchWithTimeout(`/api/share/${code}/docs`, {
+        await fetch(`/api/share/${code}/docs`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(libDocPayload(d))
         });
