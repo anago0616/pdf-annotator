@@ -254,7 +254,7 @@ function renderFolderTree(node, depth, list, collapsed, allDocs) {
         const code = await shareFolder(node.fullPath);
         showShareDialog(code, node.fullPath);
       }
-    } catch (err) { console.error(err); showToast('共有サーバーに接続できません'); }
+    } catch (err) { console.error(err); if (err.message !== '文書がありません') showToast('共有サーバーに接続できません'); }
   });
   list.appendChild(header);
   if (isClosed) return;
@@ -1443,8 +1443,12 @@ async function addDocToFolderShare(doc) {
 
 // フォルダ(タイトル)単位で共有を開始。1フォルダ = 1コード
 async function shareFolder(category) {
-  const docs = (await dbAll()).filter(d => (d.category || '未分類') === category);
-  if (!docs.length) throw new Error('文書がありません');
+  // メインフォルダ共有: 直下 + サブフォルダのドキュメントをすべて含める
+  const docs = (await dbAll()).filter(d => {
+    const c = d.category || '未分類';
+    return c === category || c.startsWith(category + '/');
+  });
+  if (!docs.length) { showToast('このフォルダに文書がありません'); throw new Error('文書がありません'); }
   const already = docs.find(d => d.shareCode);
   if (already) {
     // 既に共有中: 未登録の文書だけ追加
@@ -1499,7 +1503,7 @@ async function joinFolder(codeInput) {
 
 // フォルダの共有を解除(この端末だけ。文書は残す)
 async function unshareFolder(category) {
-  const docs = (await dbAll()).filter(d => (d.category || '未分類') === category && d.shareCode);
+  const docs = (await dbAll()).filter(d => { const c = d.category || '未分類'; return (c === category || c.startsWith(category + '/')) && d.shareCode; });
   const codes = new Set(docs.map(d => d.shareCode));
   for (const d of docs) { delete d.shareCode; delete d.remoteId; await dbPut(d); }
   for (const code of codes) closeConn(code);
