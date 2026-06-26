@@ -1610,11 +1610,15 @@ async function joinFolder(codeInput) {
 async function unshareFolder(category) {
   const docs = (await dbAll()).filter(d => { const c = d.category || '未分類'; return (c === category || c.startsWith(category + '/')) && d.shareCode; });
   const codes = new Set(docs.map(d => d.shareCode));
-  for (const d of docs) { delete d.shareCode; delete d.remoteId; await dbPut(d); }
+  // 共有ドキュメントをこの端末から削除
+  for (const d of docs) {
+    if (state.doc && state.doc.id === d.id) backToHome();
+    await dbDelete(d.id);
+  }
   for (const code of codes) closeConn(code);
   removeFolderCode(category);
   renderHome();
-  showToast('このフォルダの共有を解除しました(文書は残ります)');
+  showToast(`共有を解除し、${docs.length}件をこの端末から削除しました`);
 }
 
 /* ---- フォルダ選択ダイアログ ---- */
@@ -1676,7 +1680,7 @@ $('shareCopyBtn').addEventListener('click', async () => {
 });
 $('shareStopBtn').addEventListener('click', () => {
   $('shareDialog').hidden = true;
-  if (dialogCategory && confirm('このフォルダの共有を解除しますか？')) unshareFolder(dialogCategory);
+  if (dialogCategory && confirm('共有を解除しますか？\nこの端末から共有ファイルがすべて削除されます。\n(他の端末のファイルは残ります)')) unshareFolder(dialogCategory);
 });
 
 // エディタの🔗: 今開いている文書のフォルダを共有/コード表示
