@@ -1552,25 +1552,40 @@ async function joinFolder(codeInput) {
   showToast(`0 / ${toFetch.length} 件を取得中…`);
   let added = 0, fail = 0;
   for (const remoteId of toFetch) {
-    try {
-      const res = await fetch(`/api/share/${code}/docs/${encodeURIComponent(remoteId)}`);
-      if (!res.ok) { fail++; continue; }
-      const data = await res.json();
-      const pdfData = base64ToBuf(data.pdf);
-      const pdf = await pdfjsLib.getDocument({ data: pdfData.slice(0) }).promise;
-      await dbPut({
-        id: 'doc_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
-        name: data.name, category: data.category || folderName, pdfData,
-        annotations: data.annotations || {}, pageCount: pdf.numPages,
-        shareCode: code, remoteId, updatedAt: Date.now()
-      });
-      await pdf.destroy();
-      added++;
-      showToast(`${added} / ${toFetch.length} 件を取得中…`);
-      if (!views.home.hidden) renderHome(); // 1件ごとにホームを更新して進捗を見せる
-    } catch (err) {
-      console.error('文書取得失敗:', remoteId, err);
-      fail++;
+    let retries = 2;
+    while (retries >= 0) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 60000); // 60秒でタイムアウト
+      try {
+        const res = await fetch(`/api/share/${code}/docs/${encodeURIComponent(remoteId)}`, { signal: ctrl.signal });
+        clearTimeout(timer);
+        if (!res.ok) { fail++; break; }
+        const data = await res.json();
+        const pdfData = base64ToBuf(data.pdf);
+        const pdf = await pdfjsLib.getDocument({ data: pdfData.slice(0) }).promise;
+        await dbPut({
+          id: 'doc_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+          name: data.name, category: data.category || folderName, pdfData,
+          annotations: data.annotations || {}, pageCount: pdf.numPages,
+          shareCode: code, remoteId, updatedAt: Date.now()
+        });
+        await pdf.destroy();
+        added++;
+        showToast(`${added + fail} / ${toFetch.length} 件処理中… (成功 ${added})`);
+        if (!views.home.hidden) renderHome();
+        break; // 成功したらリトライループを抜ける
+      } catch (err) {
+        clearTimeout(timer);
+        if (retries > 0) {
+          retries--;
+          showToast(`再試行中… (残り${toFetch.length - added - fail}件)`);
+          await new Promise(r => setTimeout(r, 2000)); // 2秒待ってリトライ
+        } else {
+          console.error('文書取得失敗(リトライ上限):', remoteId, err);
+          fail++;
+          break;
+        }
+      }
     }
   }
   setFolderCode(folderName, code);
