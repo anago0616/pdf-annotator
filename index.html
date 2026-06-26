@@ -139,11 +139,28 @@
   <div class="share-dialog-box">
     <h3>📥 PDFを取り込み</h3>
     <p id="importInfo" class="share-desc"></p>
-    <input id="importCategory" class="dialog-input" list="categoryList" placeholder="タイトル(例: 会議資料)" maxlength="30">
-    <datalist id="categoryList"></datalist>
+    <div class="folder-picker-row">
+      <input id="importCategory" class="dialog-input" placeholder="フォルダ名（未入力→未分類）" maxlength="60">
+      <button id="importCategoryBtn" class="bulk-btn">📁 選択</button>
+    </div>
     <div class="text-editor-actions">
       <button id="importCancelBtn">キャンセル</button>
       <button id="importOkBtn" class="primary">取り込む</button>
+    </div>
+  </div>
+</div>
+
+<!-- フォルダ選択ダイアログ -->
+<div id="folderPickerDialog" class="share-dialog" hidden>
+  <div class="share-dialog-box folder-picker-box">
+    <h3 id="folderPickerTitle">📁 移動先フォルダ</h3>
+    <div id="folderPickerList" class="folder-picker-list"></div>
+    <div class="folder-picker-new">
+      <input id="folderPickerInput" class="dialog-input" placeholder="新しいフォルダ名（サブフォルダは 親/子）" maxlength="60">
+      <button id="folderPickerNewBtn" class="bulk-btn">＋ 作成</button>
+    </div>
+    <div class="text-editor-actions">
+      <button id="folderPickerCancel">キャンセル</button>
     </div>
   </div>
 </div>

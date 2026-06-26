@@ -330,11 +330,8 @@ function renderDocCard(d, list, allDocs) {
     }
   });
   card.querySelector('.act-move').addEventListener('click', async () => {
-    // 既存フォルダ一覧を候補に表示
-    const existingFolders = [...new Set(allDocs.map(x => x.category || '未分類'))].sort((a, b) => a.localeCompare(b, 'ja'));
-    const hint = existingFolders.length ? `\n候補: ${existingFolders.join(', ')}` : '';
-    const cat2 = prompt(`移動先フォルダ(サブフォルダは「親/子」と入力)${hint}`, d.category || '未分類');
-    if (cat2 != null) { d.category = cat2.trim() || '未分類'; await dbPut(d); renderHome(); }
+    const dest = await pickFolder('📁 移動先フォルダ', d.category || '未分類');
+    if (dest != null) { d.category = dest; await dbPut(d); renderHome(); }
   });
   card.querySelector('.act-share').addEventListener('click', () => shareDoc(d));
   card.querySelector('.act-delete').addEventListener('click', async () => {
@@ -370,13 +367,17 @@ $('fileInput').addEventListener('change', async (e) => {
   if (!files.length) return;
   pendingFiles = files;
   // 既存タイトルを候補に表示
-  const cats = [...new Set((await dbAll()).map(d => d.category || '未分類'))];
-  $('categoryList').innerHTML = cats.map(c => `<option value="${c.replace(/"/g, '&quot;')}">`).join('');
   $('importInfo').textContent = files.length === 1
     ? `「${files[0].name}」を取り込みます。管理用のタイトルを付けられます(省略可)`
     : `${files.length}件のPDFをまとめて取り込みます。管理用のタイトルを付けられます(省略可)`;
   $('importCategory').value = '';
   $('importDialog').hidden = false;
+});
+
+$('importCategoryBtn').addEventListener('click', async () => {
+  const current = $('importCategory').value.trim() || '未分類';
+  const dest = await pickFolder('📁 保存先フォルダ', current);
+  if (dest != null) $('importCategory').value = dest;
 });
 
 $('importCancelBtn').addEventListener('click', () => {
@@ -1531,6 +1532,51 @@ async function unshareFolder(category) {
   showToast('このフォルダの共有を解除しました(文書は残ります)');
 }
 
+/* ---- フォルダ選択ダイアログ ---- */
+let _fpResolve = null;
+
+async function pickFolder(title, currentFolder) {
+  return new Promise(async (resolve) => {
+    _fpResolve = resolve;
+    $('folderPickerTitle').textContent = title || '📁 移動先フォルダ';
+    const all = await dbAll();
+    const fromDocs = [...new Set(all.map(d => d.category || '未分類'))];
+    const fromStorage = JSON.parse(localStorage.getItem('pdfnote_folders') || '[]');
+    const folders = [...new Set([...fromDocs, ...fromStorage])].sort((a, b) => a.localeCompare(b, 'ja'));
+    const list = $('folderPickerList');
+    list.innerHTML = '';
+    for (const f of folders) {
+      const depth = (f.match(/\//g) || []).length;
+      const item = document.createElement('div');
+      item.className = 'folder-picker-item' + (f === currentFolder ? ' current' : '');
+      for (let i = 0; i < depth; i++) item.insertAdjacentHTML('beforeend', '<span class="fp-indent"></span>');
+      item.insertAdjacentText('beforeend', '📁 ' + f.split('/').pop());
+      if (f === currentFolder) {
+        const badge = document.createElement('span');
+        badge.style.cssText = 'font-size:11px;color:var(--text-sub);margin-left:auto';
+        badge.textContent = '現在地';
+        item.appendChild(badge);
+      }
+      item.addEventListener('click', () => { $('folderPickerDialog').hidden = true; _fpResolve && (_fpResolve(f), _fpResolve = null); });
+      list.appendChild(item);
+    }
+    $('folderPickerInput').value = '';
+    $('folderPickerDialog').hidden = false;
+  });
+}
+
+$('folderPickerCancel').addEventListener('click', () => {
+  $('folderPickerDialog').hidden = true;
+  _fpResolve && (_fpResolve(null), _fpResolve = null);
+});
+$('folderPickerNewBtn').addEventListener('click', () => {
+  const val = $('folderPickerInput').value.trim();
+  if (!val) { $('folderPickerInput').focus(); return; }
+  $('folderPickerDialog').hidden = true;
+  _fpResolve && (_fpResolve(val), _fpResolve = null);
+});
+$('folderPickerInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('folderPickerNewBtn').click(); });
+
 /* ---- 共有コードダイアログ ---- */
 let dialogCategory = null;
 function showShareDialog(code, category) {
@@ -1583,19 +1629,14 @@ $('bulkSelectAll').addEventListener('click', async () => {
 });
 $('bulkMove').addEventListener('click', async () => {
   if (selectedIds.size === 0) return;
-  const all = await dbAll();
-  const folders = [...new Set(all.map(d => d.category || '未分類'))].sort((a, b) => a.localeCompare(b, 'ja'));
-  const emptyFolders = JSON.parse(localStorage.getItem('pdfnote_folders') || '[]');
-  const allFolders = [...new Set([...folders, ...emptyFolders])].sort((a, b) => a.localeCompare(b, 'ja'));
-  const hint = allFolders.length ? `\n候補: ${allFolders.join(', ')}` : '';
-  const dest = prompt(`移動先フォルダ(サブフォルダは「親/子」と入力)${hint}`, '');
+  const dest = await pickFolder('📁 移動先フォルダ');
   if (dest == null) return;
-  const destFolder = dest.trim() || '未分類';
+  const all = await dbAll();
   const docs = all.filter(d => selectedIds.has(d.id));
-  for (const d of docs) { d.category = destFolder; await dbPut(d); }
+  for (const d of docs) { d.category = dest; await dbPut(d); }
   selectMode = false;
   selectedIds.clear();
-  showToast(`${docs.length}件を「${destFolder}」に移動しました`);
+  showToast(`${docs.length}件を「${dest}」に移動しました`);
   renderHome();
 });
 $('bulkDelete').addEventListener('click', async () => {
