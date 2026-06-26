@@ -196,9 +196,9 @@ function renderFolderTree(node, depth, list, collapsed, allDocs) {
   const header = document.createElement('div');
   header.className = 'cat-header';
   if (depth > 0) header.style.paddingLeft = (6 + depth * 20) + 'px';
-  header.innerHTML = `<span class="cat-arrow">${isClosed ? '▶' : '▼'}</span>📁 <span class="cat-name"></span><span class="cat-count">${totalDocs}</span><span class="spacer"></span><button class="icon-btn cat-rename-btn" title="フォルダ名を変更">✏️</button><button class="icon-btn cat-subfolder-btn" title="サブフォルダを追加">📁＋</button><button class="cat-share-btn${groupCode ? ' shared' : ''}"></button>`;
+  header.innerHTML = `<span class="cat-arrow">${isClosed ? '▶' : '▼'}</span>📁 <span class="cat-name"></span><span class="cat-count">${totalDocs}</span><span class="spacer"></span><button class="icon-btn cat-rename-btn" title="フォルダ名を変更">✏️</button><button class="icon-btn cat-subfolder-btn" title="サブフォルダを追加">📁＋</button>${depth === 0 ? `<button class="cat-share-btn${groupCode ? ' shared' : ''}"></button>` : ''}`;
   header.querySelector('.cat-name').textContent = node.name;
-  header.querySelector('.cat-share-btn').textContent = shareLabel;
+  if (depth === 0) header.querySelector('.cat-share-btn').textContent = shareLabel;
 
   header.addEventListener('click', (e) => {
     if (e.target.closest('button')) return;
@@ -245,7 +245,7 @@ function renderFolderTree(node, depth, list, collapsed, allDocs) {
     renderHome();
   });
 
-  header.querySelector('.cat-share-btn').addEventListener('click', async (e) => {
+  header.querySelector('.cat-share-btn')?.addEventListener('click', async (e) => {
     e.stopPropagation();
     try {
       if (groupCode) { showShareDialog(groupCode, node.fullPath); }
