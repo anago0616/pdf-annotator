@@ -1529,33 +1529,54 @@ async function shareFolder(category) {
   return code;
 }
 
-// コードでフォルダ共有に参加(相手の文書を受信し、そのフォルダに入れる)
+// コードでフォルダ共有に参加(相手の文書を1件ずつ受信してホームに反映)
 async function joinFolder(codeInput) {
   const code = (codeInput || '').trim().toUpperCase();
   if (!/^[A-Z0-9]{6}$/.test(code)) { showToast('6桁のコードを入力してください'); return; }
-  showToast('共有フォルダを取得しています…');
-  const res = await fetch('/api/share/' + code);
-  if (!res.ok) { showToast('コードが見つかりません'); return; }
-  const data = await res.json();
+  showToast('共有フォルダを確認しています…');
+  // まずメタ情報だけ取得(PDF本体なし・軽量)
+  const metaRes = await fetch('/api/share/' + code + '/meta', { cache: 'no-store' });
+  if (!metaRes.ok) { showToast('コードが見つかりません'); return; }
+  const meta = await metaRes.json();
+  const folderName = meta.name || '共有';
+  const remoteIds = Object.keys(meta.docs || {}).filter(id => !(meta.deleted || []).includes(id));
+  if (!remoteIds.length) { showToast('このフォルダにはファイルがありません'); return; }
   const local = await dbAll();
-  const folderName = data.name || '共有';
-  let added = 0;
-  for (const rd of data.docs) {
-    if (local.some(d => d.remoteId === rd.id && d.shareCode === code)) continue;
-    const pdfData = base64ToBuf(rd.pdf);
-    const pdf = await pdfjsLib.getDocument({ data: pdfData.slice(0) }).promise;
-    await dbPut({
-      id: 'doc_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
-      name: rd.name, category: rd.category || folderName, pdfData,
-      annotations: rd.annotations || {}, pageCount: pdf.numPages,
-      shareCode: code, remoteId: rd.id, updatedAt: Date.now()
-    });
-    await pdf.destroy();
-    added++;
+  const toFetch = remoteIds.filter(id => !local.some(d => d.remoteId === id && d.shareCode === code));
+  if (!toFetch.length) {
+    setFolderCode(folderName, code);
+    ensureConnections();
+    showToast('すでに参加済みです');
+    return;
+  }
+  showToast(`0 / ${toFetch.length} 件を取得中…`);
+  let added = 0, fail = 0;
+  for (const remoteId of toFetch) {
+    try {
+      const res = await fetch(`/api/share/${code}/docs/${encodeURIComponent(remoteId)}`);
+      if (!res.ok) { fail++; continue; }
+      const data = await res.json();
+      const pdfData = base64ToBuf(data.pdf);
+      const pdf = await pdfjsLib.getDocument({ data: pdfData.slice(0) }).promise;
+      await dbPut({
+        id: 'doc_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+        name: data.name, category: data.category || folderName, pdfData,
+        annotations: data.annotations || {}, pageCount: pdf.numPages,
+        shareCode: code, remoteId, updatedAt: Date.now()
+      });
+      await pdf.destroy();
+      added++;
+      showToast(`${added} / ${toFetch.length} 件を取得中…`);
+      if (!views.home.hidden) renderHome(); // 1件ごとにホームを更新して進捗を見せる
+    } catch (err) {
+      console.error('文書取得失敗:', remoteId, err);
+      fail++;
+    }
   }
   setFolderCode(folderName, code);
   ensureConnections();
-  showToast(added ? `共有フォルダ「${folderName}」に参加しました(${added}件)` : 'すでに参加済みです');
+  const msg = fail ? `${added}件を取得しました(${fail}件は失敗)` : `共有フォルダ「${folderName}」に参加しました(${added}件)`;
+  showToast(msg, 3500);
   renderHome();
 }
 
