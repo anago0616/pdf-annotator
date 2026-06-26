@@ -1343,6 +1343,7 @@ function connectRoom(code) {
       }
       (async () => {
         const all2 = await dbAll();
+        const localRemoteIds = new Set(all2.filter(d => d.shareCode === code && d.remoteId).map(d => d.remoteId));
         for (const s of all2.filter(d => d.shareCode === code && d.remoteId)) {
           if (del.includes(s.remoteId)) {
             if (state.doc && state.doc.id === s.id) { backToHome(); showToast(`「${s.name}」は他の端末で削除されました`); }
@@ -1353,6 +1354,12 @@ function connectRoom(code) {
           if (all[s.remoteId] && JSON.stringify(s.annotations) !== JSON.stringify(all[s.remoteId])) { s.annotations = all[s.remoteId]; dirty = true; }
           if (dn[s.remoteId] && dn[s.remoteId] !== s.name) { s.name = dn[s.remoteId]; dirty = true; }
           if (dirty) await dbPut(s);
+        }
+        // サーバーにあってローカルにないドキュメントを受信(接続前に追加されたファイルを同期)
+        for (const remoteId of Object.keys(dn)) {
+          if (!localRemoteIds.has(remoteId) && !del.includes(remoteId)) {
+            receiveSharedDoc(code, remoteId);
+          }
         }
         if (state.doc && state.doc.shareCode === code && all[state.doc.remoteId]) {
           state.doc.annotations = all[state.doc.remoteId];
