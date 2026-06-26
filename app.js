@@ -1235,45 +1235,47 @@ async function applyOpToDb(shareCode, remoteId, page, op) {
   await dbPut(doc);
 }
 
-// doc:add通知・init補完: 共有タイトルに追加された文書を受信(60秒タイムアウト・2回リトライ)
-async function receiveSharedDoc(shareCode, remoteId) {
-  const all = await dbAll();
-  if (all.some(d => d.shareCode === shareCode && d.remoteId === remoteId)) return;
-  const sibling = all.find(d => d.shareCode === shareCode);
-  for (let attempt = 0; attempt <= 2; attempt++) {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 60000);
-    try {
-      const res = await fetch(`/api/share/${shareCode}/docs/${encodeURIComponent(remoteId)}`, { signal: ctrl.signal });
-      clearTimeout(timer);
-      if (!res.ok) return;
-      const data = await res.json();
-      const pdfData = base64ToBuf(data.pdf);
-      const pdf = await pdfjsLib.getDocument({ data: pdfData.slice(0) }).promise;
-      const doc = {
-        id: 'doc_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
-        name: data.name,
-        category: data.category || (sibling ? (sibling.category || '未分類') : '未分類'),
-        pdfData,
-        annotations: data.annotations || {},
-        pageCount: pdf.numPages,
-        shareCode,
-        remoteId,
-        updatedAt: Date.now()
-      };
-      await pdf.destroy();
-      await dbPut(doc);
-      showToast(`共有文書「${data.name}」が追加されました`);
-      if (!views.home.hidden) renderHome();
-      return; // 成功
-    } catch (err) {
-      clearTimeout(timer);
-      if (attempt < 2) {
-        await new Promise(r => setTimeout(r, 3000 * (attempt + 1))); // 3秒→6秒と間隔を広げてリトライ
-      } else {
-        console.error('共有文書の受信に失敗(リトライ上限):', remoteId, err);
+const _receivingDocs = new Set(); // 取得中の remoteId を記録して二重取得を防ぐ
+
+// doc:add通知・init補完・joinFolder共通: 1件取得(60秒タイムアウト・2回リトライ・二重取得防止)
+async function receiveSharedDoc(shareCode, remoteId, { silent = false } = {}) {
+  const key = shareCode + ':' + remoteId;
+  if (_receivingDocs.has(key)) return false; // 既に取得中
+  _receivingDocs.add(key);
+  try {
+    const all = await dbAll();
+    if (all.some(d => d.shareCode === shareCode && d.remoteId === remoteId)) return true; // 既存
+    const sibling = all.find(d => d.shareCode === shareCode);
+    for (let attempt = 0; attempt <= 2; attempt++) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 60000);
+      try {
+        const res = await fetch(`/api/share/${shareCode}/docs/${encodeURIComponent(remoteId)}`, { signal: ctrl.signal });
+        clearTimeout(timer);
+        if (!res.ok) return false;
+        const data = await res.json();
+        const pdfData = base64ToBuf(data.pdf);
+        const pdf = await pdfjsLib.getDocument({ data: pdfData.slice(0) }).promise;
+        await dbPut({
+          id: 'doc_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+          name: data.name,
+          category: data.category || (sibling ? (sibling.category || '未分類') : '未分類'),
+          pdfData, annotations: data.annotations || {},
+          pageCount: pdf.numPages, shareCode, remoteId, updatedAt: Date.now()
+        });
+        await pdf.destroy();
+        if (!silent) showToast(`共有文書「${data.name}」が追加されました`);
+        if (!views.home.hidden) renderHome();
+        return true;
+      } catch (err) {
+        clearTimeout(timer);
+        if (attempt < 2) await new Promise(r => setTimeout(r, 3000 * (attempt + 1)));
+        else console.error('共有文書の受信に失敗(リトライ上限):', remoteId, err);
       }
     }
+    return false;
+  } finally {
+    _receivingDocs.delete(key);
   }
 }
 
@@ -1562,42 +1564,11 @@ async function joinFolder(codeInput) {
   }
   showToast(`0 / ${toFetch.length} 件を取得中…`);
   let added = 0, fail = 0;
+  // receiveSharedDoc に統一することで init との二重取得を防ぐ
   for (const remoteId of toFetch) {
-    let retries = 2;
-    while (retries >= 0) {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 60000); // 60秒でタイムアウト
-      try {
-        const res = await fetch(`/api/share/${code}/docs/${encodeURIComponent(remoteId)}`, { signal: ctrl.signal });
-        clearTimeout(timer);
-        if (!res.ok) { fail++; break; }
-        const data = await res.json();
-        const pdfData = base64ToBuf(data.pdf);
-        const pdf = await pdfjsLib.getDocument({ data: pdfData.slice(0) }).promise;
-        await dbPut({
-          id: 'doc_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
-          name: data.name, category: data.category || folderName, pdfData,
-          annotations: data.annotations || {}, pageCount: pdf.numPages,
-          shareCode: code, remoteId, updatedAt: Date.now()
-        });
-        await pdf.destroy();
-        added++;
-        showToast(`${added + fail} / ${toFetch.length} 件処理中… (成功 ${added})`);
-        if (!views.home.hidden) renderHome();
-        break; // 成功したらリトライループを抜ける
-      } catch (err) {
-        clearTimeout(timer);
-        if (retries > 0) {
-          retries--;
-          showToast(`再試行中… (残り${toFetch.length - added - fail}件)`);
-          await new Promise(r => setTimeout(r, 2000)); // 2秒待ってリトライ
-        } else {
-          console.error('文書取得失敗(リトライ上限):', remoteId, err);
-          fail++;
-          break;
-        }
-      }
-    }
+    const ok = await receiveSharedDoc(code, remoteId, { silent: true });
+    if (ok) added++; else fail++;
+    showToast(`${added + fail} / ${toFetch.length} 件処理中… (成功 ${added})`);
   }
   setFolderCode(folderName, code);
   ensureConnections();
