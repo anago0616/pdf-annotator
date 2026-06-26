@@ -126,130 +126,200 @@ function updateBulkBar() {
 async function renderHome() {
   views.editor.hidden = true;
   views.home.hidden = false;
-  document.body.classList.remove('editing'); // ホームではブラウザズームを許可
+  document.body.classList.remove('editing');
   $('selectBtn').textContent = selectMode ? '✕ 解除' : '☑ 選択';
   $('addBtn').style.display = selectMode ? 'none' : '';
   updateBulkBar();
-  // 文書は名前の昇順で固定表示(数字は自然順。例: 資料2 < 資料10)。名前欠損でも落ちないようガード
   const docs = (await dbAll()).sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ja', { numeric: true }));
   const list = $('docList');
   list.innerHTML = '';
   $('emptyState').hidden = docs.length > 0;
 
-  // タイトル(グループ)ごとにまとめる
   const groups = new Map();
   for (const d of docs) {
     const cat = d.category || '未分類';
     if (!groups.has(cat)) groups.set(cat, []);
     groups.get(cat).push(d);
   }
-  const cats = [...groups.keys()].sort((a, b) => {
-    if (a === '未分類') return 1;
-    if (b === '未分類') return -1;
-    return a.localeCompare(b, 'ja');
-  });
   const collapsed = new Set(JSON.parse(localStorage.getItem('pdfnote_collapsed') || '[]'));
-
-  for (const cat of cats) {
-    const items = groups.get(cat);
-    const isClosed = collapsed.has(cat);
-
-    const groupCode = (items.find(d => d.shareCode) || {}).shareCode;
-    const conn = groupCode ? conns.get(groupCode) : null;
-    const shareLabel = groupCode
-      ? `🔗 ${groupCode}${conn && !conn.offline ? ' ・' + (conn.members || 1) + '台' : ''}`
-      : '🔗 共有';
-    const header = document.createElement('div');
-    header.className = 'cat-header';
-    header.innerHTML = `<span class="cat-arrow">${isClosed ? '▶' : '▼'}</span>📁 <span class="cat-name"></span><span class="cat-count">${items.length}</span><span class="spacer"></span><button class="cat-share-btn${groupCode ? ' shared' : ''}"></button>`;
-    header.querySelector('.cat-name').textContent = cat;
-    header.querySelector('.cat-share-btn').textContent = shareLabel;
-    header.addEventListener('click', () => {
-      if (collapsed.has(cat)) collapsed.delete(cat);
-      else collapsed.add(cat);
-      localStorage.setItem('pdfnote_collapsed', JSON.stringify([...collapsed]));
-      renderHome();
-    });
-    header.querySelector('.cat-share-btn').addEventListener('click', async (e) => {
-      e.stopPropagation();
-      try {
-        if (groupCode) { showShareDialog(groupCode, cat); }
-        else {
-          if (!confirm(`「${cat}」の${items.length}件を共有しますか？(コードを相手に伝えると同期されます)`)) return;
-          const code = await shareFolder(cat);
-          showShareDialog(code, cat);
-        }
-      } catch (err) { console.error(err); showToast('共有サーバーに接続できません'); }
-    });
-    list.appendChild(header);
-    if (isClosed) continue;
-
-    for (const d of items) {
-      const card = document.createElement('div');
-      card.className = 'doc-card';
-      if (selectMode && selectedIds.has(d.id)) card.classList.add('selected');
-      card.innerHTML = `
-        ${selectMode ? `<div class="doc-check">${selectedIds.has(d.id) ? '✓' : ''}</div>` : '<div class="doc-icon">📄</div>'}
-        <div class="doc-info">
-          <div class="doc-name"></div>
-          <div class="doc-meta">${d.pageCount}ページ ・ ${new Date(d.updatedAt).toLocaleString('ja-JP')}</div>
-        </div>
-        <div class="doc-actions">
-          <button class="icon-btn act-rename" title="名前を変更">✏️</button>
-          <button class="icon-btn act-move" title="タイトルを変更">📁</button>
-          <button class="icon-btn act-share" title="共有">📤</button>
-          <button class="icon-btn act-delete" title="削除">🗑️</button>
-        </div>`;
-      card.querySelector('.doc-name').textContent = d.name;
-      if (selectMode) {
-        // 選択モード: カードのタップで選択トグル
-        const toggle = () => {
-          if (selectedIds.has(d.id)) selectedIds.delete(d.id);
-          else selectedIds.add(d.id);
-          renderHome();
-        };
-        card.querySelector('.doc-check').addEventListener('click', toggle);
-        card.querySelector('.doc-info').addEventListener('click', toggle);
-        list.appendChild(card);
-        continue;
-      }
-      card.querySelector('.doc-info').addEventListener('click', () => openEditor(d.id));
-      card.querySelector('.doc-icon').addEventListener('click', () => openEditor(d.id));
-      card.querySelector('.act-rename').addEventListener('click', async () => {
-        const name = prompt('新しい名前', d.name);
-        if (name && name.trim()) {
-          d.name = name.trim();
-          await dbPut(d);
-          // 共有中なら相手にも名前変更を反映(ルームが消えていれば作り直して確実に残す)
-          if (d.shareCode && d.remoteId) {
-            fetch(`/api/share/${d.shareCode}/docs/${encodeURIComponent(d.remoteId)}/rename`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ name: d.name })
-            }).then(res => { if (res.status === 404) recreateRoom(d.shareCode); }).catch(() => {});
-          }
-          renderHome();
-        }
-      });
-      card.querySelector('.act-move').addEventListener('click', async () => {
-        const cat2 = prompt('移動先のタイトル(グループ名)', d.category || '未分類');
-        if (cat2 != null) {
-          d.category = cat2.trim() || '未分類';
-          await dbPut(d);
-          renderHome();
-        }
-      });
-      card.querySelector('.act-share').addEventListener('click', () => shareDoc(d));
-      card.querySelector('.act-delete').addEventListener('click', async () => {
-        if (confirm(`「${d.name}」を削除しますか？`)) {
-          await deleteDocs([d]);
-          renderHome();
-        }
-      });
-      list.appendChild(card);
-    }
-  }
+  const emptyFolders = JSON.parse(localStorage.getItem('pdfnote_folders') || '[]');
+  const tree = buildFolderTree(groups, emptyFolders);
+  renderFolderTree(tree, 0, list, collapsed, docs);
   applySyncUI();
+}
+
+// カテゴリ名の"/"でネストしたツリー構造を構築する
+function buildFolderTree(groups, emptyFolders) {
+  const root = { children: new Map() };
+  const ensurePath = (path) => {
+    const parts = path.split('/');
+    let node = root, fullPath = '';
+    for (const part of parts) {
+      fullPath = fullPath ? fullPath + '/' + part : part;
+      if (!node.children.has(part))
+        node.children.set(part, { name: part, fullPath, children: new Map(), docs: [] });
+      node = node.children.get(part);
+    }
+    return node;
+  };
+  for (const [path, docs] of groups) ensurePath(path).docs = docs;
+  for (const path of emptyFolders) ensurePath(path);
+  return root;
+}
+
+function countFolderDocs(node) {
+  let n = node.docs.length;
+  for (const c of node.children.values()) n += countFolderDocs(c);
+  return n;
+}
+
+function renderFolderTree(node, depth, list, collapsed, allDocs) {
+  if (!node.name) {
+    // ルートノード: 子を名前順で描画(未分類は末尾)
+    const sorted = [...node.children.values()].sort((a, b) => {
+      if (a.name === '未分類') return 1; if (b.name === '未分類') return -1;
+      return a.name.localeCompare(b.name, 'ja');
+    });
+    for (const child of sorted) renderFolderTree(child, 0, list, collapsed, allDocs);
+    return;
+  }
+
+  const isClosed = collapsed.has(node.fullPath);
+  const totalDocs = countFolderDocs(node);
+  const groupCode = (node.docs.find(d => d.shareCode) || {}).shareCode;
+  const conn = groupCode ? conns.get(groupCode) : null;
+  const shareLabel = groupCode
+    ? `🔗 ${groupCode}${conn && !conn.offline ? ' ・' + (conn.members || 1) + '台' : ''}`
+    : '🔗 共有';
+
+  const header = document.createElement('div');
+  header.className = 'cat-header';
+  if (depth > 0) header.style.paddingLeft = (6 + depth * 20) + 'px';
+  header.innerHTML = `<span class="cat-arrow">${isClosed ? '▶' : '▼'}</span>📁 <span class="cat-name"></span><span class="cat-count">${totalDocs}</span><span class="spacer"></span><button class="icon-btn cat-rename-btn" title="フォルダ名を変更">✏️</button><button class="icon-btn cat-subfolder-btn" title="サブフォルダを追加">📁＋</button><button class="cat-share-btn${groupCode ? ' shared' : ''}"></button>`;
+  header.querySelector('.cat-name').textContent = node.name;
+  header.querySelector('.cat-share-btn').textContent = shareLabel;
+
+  header.addEventListener('click', (e) => {
+    if (e.target.closest('button')) return;
+    if (collapsed.has(node.fullPath)) collapsed.delete(node.fullPath);
+    else collapsed.add(node.fullPath);
+    localStorage.setItem('pdfnote_collapsed', JSON.stringify([...collapsed]));
+    renderHome();
+  });
+
+  // フォルダ名変更: サブフォルダのパスも一括更新
+  header.querySelector('.cat-rename-btn').addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const newName = prompt('フォルダ名', node.name);
+    if (!newName || !newName.trim() || newName.trim() === node.name) return;
+    const parentPrefix = node.fullPath.includes('/') ? node.fullPath.slice(0, node.fullPath.lastIndexOf('/') + 1) : '';
+    const newPath = parentPrefix + newName.trim();
+    for (const d of allDocs) {
+      const c = d.category || '未分類';
+      if (c === node.fullPath || c.startsWith(node.fullPath + '/')) {
+        d.category = newPath + c.slice(node.fullPath.length);
+        await dbPut(d);
+      }
+    }
+    const ef = JSON.parse(localStorage.getItem('pdfnote_folders') || '[]');
+    localStorage.setItem('pdfnote_folders', JSON.stringify(
+      ef.map(f => f === node.fullPath ? newPath : f.startsWith(node.fullPath + '/') ? newPath + f.slice(node.fullPath.length) : f)
+    ));
+    const nc = [...collapsed].map(f => f === node.fullPath ? newPath : f.startsWith(node.fullPath + '/') ? newPath + f.slice(node.fullPath.length) : f);
+    localStorage.setItem('pdfnote_collapsed', JSON.stringify(nc));
+    renderHome();
+  });
+
+  // サブフォルダ作成
+  header.querySelector('.cat-subfolder-btn').addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const subName = prompt('サブフォルダ名', '');
+    if (!subName || !subName.trim()) return;
+    const subPath = node.fullPath + '/' + subName.trim();
+    const ef = JSON.parse(localStorage.getItem('pdfnote_folders') || '[]');
+    if (!ef.includes(subPath)) ef.push(subPath);
+    localStorage.setItem('pdfnote_folders', JSON.stringify(ef));
+    collapsed.delete(node.fullPath);
+    localStorage.setItem('pdfnote_collapsed', JSON.stringify([...collapsed]));
+    renderHome();
+  });
+
+  header.querySelector('.cat-share-btn').addEventListener('click', async (e) => {
+    e.stopPropagation();
+    try {
+      if (groupCode) { showShareDialog(groupCode, node.fullPath); }
+      else {
+        if (!confirm(`「${node.name}」の${node.docs.length}件を共有しますか？(コードを相手に伝えると同期されます)`)) return;
+        const code = await shareFolder(node.fullPath);
+        showShareDialog(code, node.fullPath);
+      }
+    } catch (err) { console.error(err); showToast('共有サーバーに接続できません'); }
+  });
+  list.appendChild(header);
+  if (isClosed) return;
+
+  // このフォルダ直下の文書を描画
+  for (const d of node.docs) renderDocCard(d, list, allDocs);
+
+  // サブフォルダを名前順で描画
+  const sortedChildren = [...node.children.values()].sort((a, b) => a.name.localeCompare(b.name, 'ja'));
+  for (const child of sortedChildren) renderFolderTree(child, depth + 1, list, collapsed, allDocs);
+}
+
+function renderDocCard(d, list, allDocs) {
+  const card = document.createElement('div');
+  card.className = 'doc-card';
+  if (selectMode && selectedIds.has(d.id)) card.classList.add('selected');
+  card.innerHTML = `
+    ${selectMode ? `<div class="doc-check">${selectedIds.has(d.id) ? '✓' : ''}</div>` : '<div class="doc-icon">📄</div>'}
+    <div class="doc-info">
+      <div class="doc-name"></div>
+      <div class="doc-meta">${d.pageCount}ページ ・ ${new Date(d.updatedAt).toLocaleString('ja-JP')}</div>
+    </div>
+    <div class="doc-actions">
+      <button class="icon-btn act-rename" title="名前を変更">✏️</button>
+      <button class="icon-btn act-move" title="フォルダを移動">📁</button>
+      <button class="icon-btn act-share" title="共有">📤</button>
+      <button class="icon-btn act-delete" title="削除">🗑️</button>
+    </div>`;
+  card.querySelector('.doc-name').textContent = d.name;
+  if (selectMode) {
+    const toggle = () => {
+      if (selectedIds.has(d.id)) selectedIds.delete(d.id); else selectedIds.add(d.id);
+      renderHome();
+    };
+    card.querySelector('.doc-check').addEventListener('click', toggle);
+    card.querySelector('.doc-info').addEventListener('click', toggle);
+    list.appendChild(card);
+    return;
+  }
+  card.querySelector('.doc-info').addEventListener('click', () => openEditor(d.id));
+  card.querySelector('.doc-icon').addEventListener('click', () => openEditor(d.id));
+  card.querySelector('.act-rename').addEventListener('click', async () => {
+    const name = prompt('新しい名前', d.name);
+    if (name && name.trim()) {
+      d.name = name.trim(); await dbPut(d);
+      if (d.shareCode && d.remoteId) {
+        fetch(`/api/share/${d.shareCode}/docs/${encodeURIComponent(d.remoteId)}/rename`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: d.name })
+        }).then(res => { if (res.status === 404) recreateRoom(d.shareCode); }).catch(() => {});
+      }
+      renderHome();
+    }
+  });
+  card.querySelector('.act-move').addEventListener('click', async () => {
+    // 既存フォルダ一覧を候補に表示
+    const existingFolders = [...new Set(allDocs.map(x => x.category || '未分類'))].sort((a, b) => a.localeCompare(b, 'ja'));
+    const hint = existingFolders.length ? `\n候補: ${existingFolders.join(', ')}` : '';
+    const cat2 = prompt(`移動先フォルダ(サブフォルダは「親/子」と入力)${hint}`, d.category || '未分類');
+    if (cat2 != null) { d.category = cat2.trim() || '未分類'; await dbPut(d); renderHome(); }
+  });
+  card.querySelector('.act-share').addEventListener('click', () => shareDoc(d));
+  card.querySelector('.act-delete').addEventListener('click', async () => {
+    if (confirm(`「${d.name}」を削除しますか？`)) { await deleteDocs([d]); renderHome(); }
+  });
+  list.appendChild(card);
 }
 
 async function importPdf(name, arrayBuffer, category = '未分類') {
