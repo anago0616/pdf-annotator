@@ -391,7 +391,8 @@ $('importOkBtn').addEventListener('click', async () => {
   $('importDialog').hidden = true;
   const category = $('importCategory').value.trim() || '未分類';
   // 取り込み先フォルダが共有中なら、新しい文書もそのフォルダの共有に追加
-  const folderCode = ((await dbAll()).find(d => (d.category || '未分類') === category && d.shareCode) || {}).shareCode;
+  // ファイルが0件でも共有コードが残るようマッピングから検索(ドキュメントへの依存をなくす)
+  const folderCode = getCodeForCategory(category) || ((await dbAll()).find(d => { const c = d.category || '未分類'; return (c === category || c.startsWith(category + '/')) && d.shareCode; }) || {}).shareCode;
   let ok = 0, fail = 0, lastDoc = null;
   for (const file of files) {
     try {
@@ -1462,6 +1463,30 @@ async function addDocToFolderShare(doc) {
   } catch (_) {}
 }
 
+// フォルダ名→共有コードのマッピング(ファイルが0件でもコードを保持するため)
+function getFolderCodes() { return JSON.parse(localStorage.getItem('pdfnote_share_codes') || '{}'); }
+function setFolderCode(category, code) {
+  const m = getFolderCodes(); m[category] = code;
+  localStorage.setItem('pdfnote_share_codes', JSON.stringify(m));
+}
+function removeFolderCode(category) {
+  const m = getFolderCodes();
+  for (const k of Object.keys(m)) { if (k === category || k.startsWith(category + '/')) delete m[k]; }
+  localStorage.setItem('pdfnote_share_codes', JSON.stringify(m));
+}
+// カテゴリに対応する共有コードを返す(サブフォルダなら親フォルダのコードも探す)
+function getCodeForCategory(category) {
+  const m = getFolderCodes();
+  if (m[category]) return m[category];
+  // サブフォルダなら親を遡って探す
+  const parts = category.split('/');
+  for (let i = parts.length - 1; i >= 1; i--) {
+    const parent = parts.slice(0, i).join('/');
+    if (m[parent]) return m[parent];
+  }
+  return null;
+}
+
 // フォルダ(タイトル)単位で共有を開始。1フォルダ = 1コード
 async function shareFolder(category) {
   // メインフォルダ共有: 直下 + サブフォルダのドキュメントをすべて含める
@@ -1470,15 +1495,18 @@ async function shareFolder(category) {
     return c === category || c.startsWith(category + '/');
   });
   if (!docs.length) { showToast('このフォルダに文書がありません'); throw new Error('文書がありません'); }
-  const already = docs.find(d => d.shareCode);
-  if (already) {
+  const existingCode = getCodeForCategory(category);
+  const already = docs.find(d => d.shareCode) || (existingCode ? { shareCode: existingCode } : null);
+  if (already && already.shareCode) {
+    const code = already.shareCode;
+    setFolderCode(category, code);
     // 既に共有中: 未登録の文書だけ追加
     for (const d of docs.filter(x => !x.shareCode)) {
-      d.shareCode = already.shareCode; d.remoteId = d.id; await dbPut(d);
+      d.shareCode = code; d.remoteId = d.id; await dbPut(d);
       await addDocToFolderShare(d);
     }
     ensureConnections();
-    return already.shareCode;
+    return code;
   }
   showToast('共有を準備しています…');
   const res = await fetch('/api/share', {
@@ -1488,6 +1516,7 @@ async function shareFolder(category) {
   if (!res.ok) throw new Error('share failed: ' + res.status);
   const { code } = await res.json();
   for (const d of docs) { d.shareCode = code; d.remoteId = d.id; await dbPut(d); }
+  setFolderCode(category, code);
   ensureConnections();
   renderHome();
   return code;
@@ -1517,6 +1546,7 @@ async function joinFolder(codeInput) {
     await pdf.destroy();
     added++;
   }
+  setFolderCode(folderName, code);
   ensureConnections();
   showToast(added ? `共有フォルダ「${folderName}」に参加しました(${added}件)` : 'すでに参加済みです');
   renderHome();
@@ -1528,6 +1558,7 @@ async function unshareFolder(category) {
   const codes = new Set(docs.map(d => d.shareCode));
   for (const d of docs) { delete d.shareCode; delete d.remoteId; await dbPut(d); }
   for (const code of codes) closeConn(code);
+  removeFolderCode(category);
   renderHome();
   showToast('このフォルダの共有を解除しました(文書は残ります)');
 }
