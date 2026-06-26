@@ -196,7 +196,7 @@ function renderFolderTree(node, depth, list, collapsed, allDocs) {
   const header = document.createElement('div');
   header.className = 'cat-header';
   if (depth > 0) header.style.paddingLeft = (6 + depth * 20) + 'px';
-  header.innerHTML = `<span class="cat-arrow">${isClosed ? '▶' : '▼'}</span>📁 <span class="cat-name"></span><span class="cat-count">${totalDocs}</span><span class="spacer"></span><button class="icon-btn cat-rename-btn" title="フォルダ名を変更">✏️</button><button class="icon-btn cat-subfolder-btn" title="サブフォルダを追加">📁＋</button>${depth === 0 ? `<button class="cat-share-btn${groupCode ? ' shared' : ''}"></button>` : ''}`;
+  header.innerHTML = `<span class="cat-arrow">${isClosed ? '▶' : '▼'}</span>📁 <span class="cat-name"></span><span class="cat-count">${totalDocs}</span><span class="spacer"></span><button class="icon-btn cat-rename-btn" title="フォルダ名を変更">✏️</button><button class="icon-btn cat-subfolder-btn" title="サブフォルダを追加">📁＋</button><button class="icon-btn cat-delete-btn" title="フォルダを削除">🗑️</button>${depth === 0 ? `<button class="cat-share-btn${groupCode ? ' shared' : ''}"></button>` : ''}`;
   header.querySelector('.cat-name').textContent = node.name;
   if (depth === 0) header.querySelector('.cat-share-btn').textContent = shareLabel;
 
@@ -242,6 +242,26 @@ function renderFolderTree(node, depth, list, collapsed, allDocs) {
     localStorage.setItem('pdfnote_folders', JSON.stringify(ef));
     collapsed.delete(node.fullPath);
     localStorage.setItem('pdfnote_collapsed', JSON.stringify([...collapsed]));
+    renderHome();
+  });
+
+  // フォルダ削除: 中のドキュメントごと削除するか、未分類に移すか選ぶ
+  header.querySelector('.cat-delete-btn').addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const affected = allDocs.filter(d => { const c = d.category || '未分類'; return c === node.fullPath || c.startsWith(node.fullPath + '/'); });
+    if (affected.length > 0) {
+      const choice = confirm(`「${node.name}」を削除します。\n中の${affected.length}件のドキュメントも一緒に削除しますか？\n\n[OK] ドキュメントごと削除\n[キャンセル] ドキュメントは「未分類」に移動して残す`);
+      if (choice) {
+        await deleteDocs(affected);
+      } else {
+        for (const d of affected) { d.category = '未分類'; await dbPut(d); }
+      }
+    }
+    // localStorage からフォルダ(サブフォルダ含む)を削除
+    const ef = JSON.parse(localStorage.getItem('pdfnote_folders') || '[]');
+    localStorage.setItem('pdfnote_folders', JSON.stringify(ef.filter(f => f !== node.fullPath && !f.startsWith(node.fullPath + '/'))));
+    const nc = JSON.parse(localStorage.getItem('pdfnote_collapsed') || '[]');
+    localStorage.setItem('pdfnote_collapsed', JSON.stringify(nc.filter(f => f !== node.fullPath && !f.startsWith(node.fullPath + '/'))));
     renderHome();
   });
 
