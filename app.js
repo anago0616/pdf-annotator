@@ -120,6 +120,7 @@ function updateBulkBar() {
   bar.hidden = !selectMode;
   if (!selectMode) return;
   $('bulkCount').textContent = `${selectedIds.size}件選択`;
+  $('bulkMove').disabled = selectedIds.size === 0;
   $('bulkDelete').disabled = selectedIds.size === 0;
 }
 
@@ -1554,6 +1555,23 @@ $('bulkSelectAll').addEventListener('click', async () => {
   const all = await dbAll();
   if (selectedIds.size === all.length) selectedIds.clear(); // 全選択済みなら全解除
   else for (const d of all) selectedIds.add(d.id);
+  renderHome();
+});
+$('bulkMove').addEventListener('click', async () => {
+  if (selectedIds.size === 0) return;
+  const all = await dbAll();
+  const folders = [...new Set(all.map(d => d.category || '未分類'))].sort((a, b) => a.localeCompare(b, 'ja'));
+  const emptyFolders = JSON.parse(localStorage.getItem('pdfnote_folders') || '[]');
+  const allFolders = [...new Set([...folders, ...emptyFolders])].sort((a, b) => a.localeCompare(b, 'ja'));
+  const hint = allFolders.length ? `\n候補: ${allFolders.join(', ')}` : '';
+  const dest = prompt(`移動先フォルダ(サブフォルダは「親/子」と入力)${hint}`, '');
+  if (dest == null) return;
+  const destFolder = dest.trim() || '未分類';
+  const docs = all.filter(d => selectedIds.has(d.id));
+  for (const d of docs) { d.category = destFolder; await dbPut(d); }
+  selectMode = false;
+  selectedIds.clear();
+  showToast(`${docs.length}件を「${destFolder}」に移動しました`);
   renderHome();
 });
 $('bulkDelete').addEventListener('click', async () => {
