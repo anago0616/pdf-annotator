@@ -10,11 +10,77 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
+const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, ListObjectsV2Command } = require('@aws-sdk/client-s3');
 
 const PORT = process.env.PORT || 8741;
 const ROOT = __dirname;
 const DATA_DIR = path.join(ROOT, 'data');
 fs.mkdirSync(DATA_DIR, { recursive: true });
+
+// ─── R2 ─────────────────────────────────────────────────────
+const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID || '';
+const R2_BUCKET     = process.env.R2_BUCKET     || 'file-share-app';
+const R2_ACCESS_KEY = process.env.R2_ACCESS_KEY || '';
+const R2_SECRET_KEY = process.env.R2_SECRET_KEY || '';
+const USE_R2 = !!(R2_ACCESS_KEY && R2_SECRET_KEY && R2_ACCOUNT_ID);
+
+let s3;
+if (USE_R2) {
+  s3 = new S3Client({
+    region: 'auto',
+    endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+    credentials: { accessKeyId: R2_ACCESS_KEY, secretAccessKey: R2_SECRET_KEY },
+  });
+  console.log('☁️  R2ストレージ使用中');
+}
+
+async function r2Put(key, body) {
+  await s3.send(new PutObjectCommand({ Bucket: R2_BUCKET, Key: key, Body: body, ContentType: 'application/json' }));
+}
+
+async function r2Get(key) {
+  const res = await s3.send(new GetObjectCommand({ Bucket: R2_BUCKET, Key: key }));
+  const chunks = [];
+  for await (const chunk of res.Body) chunks.push(chunk);
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+async function r2List(prefix) {
+  const res = await s3.send(new ListObjectsV2Command({ Bucket: R2_BUCKET, Prefix: prefix }));
+  return (res.Contents || []).map(o => o.Key);
+}
+
+async function r2Delete(key) {
+  await s3.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: key }));
+}
+
+async function persistRoomR2(room) {
+  const { clients, saveTimer, ...data } = room;
+  data.updatedAt = Date.now();
+  await r2Put(`pdf-data/${room.code}.json`, JSON.stringify(data));
+}
+
+async function loadRoomsFromR2() {
+  try {
+    const keys = await r2List('pdf-data/');
+    for (const key of keys) {
+      try {
+        const text = await r2Get(key);
+        const r = JSON.parse(text);
+        if (r.pdf && !r.docs) {
+          r.docs = { doc_legacy: { name: r.name, pdf: r.pdf, annotations: r.annotations || {} } };
+          delete r.pdf; delete r.annotations;
+        }
+        rooms.set(r.code, { deleted: [], ...r, clients: new Set(), saveTimer: null });
+      } catch (e) {
+        console.error('R2ルーム読み込み失敗:', key, e.message);
+      }
+    }
+    console.log(`R2から ${rooms.size} 件のルームを復元しました`);
+  } catch (e) {
+    console.error('R2一覧取得失敗:', e.message);
+  }
+}
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -41,11 +107,11 @@ function getDisplayName(url) {
  */
 const rooms = new Map();
 
+// ローカルからルームを読み込む(R2未使用時またはフォールバック)
 for (const f of fs.readdirSync(DATA_DIR)) {
   if (!f.endsWith('.json') || f === 'users.json' || f === 'sessions.json') continue;
   try {
     const r = JSON.parse(fs.readFileSync(path.join(DATA_DIR, f), 'utf8'));
-    // 旧形式(文書1つ)からの移行
     if (r.pdf && !r.docs) {
       r.docs = { doc_legacy: { name: r.name, pdf: r.pdf, annotations: r.annotations || {} } };
       delete r.pdf;
@@ -56,16 +122,21 @@ for (const f of fs.readdirSync(DATA_DIR)) {
     console.error('ルーム読み込み失敗:', f, e.message);
   }
 }
-console.log(`${rooms.size} 件の共有ルームを復元しました`);
+if (!USE_R2) console.log(`${rooms.size} 件の共有ルームを復元しました`);
 
 function persistRoom(room) {
   clearTimeout(room.saveTimer);
   room.saveTimer = setTimeout(() => {
     const { clients, saveTimer, ...data } = room;
     data.updatedAt = Date.now();
-    fs.writeFile(path.join(DATA_DIR, room.code + '.json'), JSON.stringify(data), (err) => {
-      if (err) console.error('保存失敗:', room.code, err.message);
-    });
+    if (USE_R2) {
+      r2Put(`pdf-data/${room.code}.json`, JSON.stringify(data))
+        .catch(e => console.error('R2保存失敗:', room.code, e.message));
+    } else {
+      fs.writeFile(path.join(DATA_DIR, room.code + '.json'), JSON.stringify(data), (err) => {
+        if (err) console.error('保存失敗:', room.code, err.message);
+      });
+    }
   }, 800);
 }
 
@@ -286,9 +357,17 @@ wss.on('connection', (ws, req) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`PDFノート サーバー起動: http://localhost:${PORT}`);
-});
+async function startServer() {
+  if (USE_R2) {
+    rooms.clear(); // ローカルデータを破棄してR2から読み込む
+    await loadRoomsFromR2();
+  }
+  server.listen(PORT, () => {
+    console.log(`PDFノート サーバー起動: http://localhost:${PORT}`);
+  });
+}
+
+startServer();
 
 /* ---- スリープ防止(無料プラン用・自己ping) ----
  * Render無料プランは15分アクセスがないとスリープし、復帰に数十秒かかる。
