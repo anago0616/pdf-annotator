@@ -63,6 +63,28 @@
     </div>
     <p class="subtitle">PDFに書き込み・共有できるノートアプリ</p>
   </header>
+  <!-- インストールバナー -->
+  <div id="installBanner" class="install-banner" hidden>
+    <div class="install-banner-text">
+      <span class="install-icon">📲</span>
+      <span id="installBannerMsg">アプリとしてインストールできます</span>
+    </div>
+    <button id="installBtn" class="install-btn">インストール</button>
+    <button id="installDismiss" class="install-dismiss">✕</button>
+  </div>
+  <!-- iOS用インストール手順オーバーレイ -->
+  <div id="iosInstallOverlay" class="share-dialog" hidden>
+    <div class="share-dialog-box ios-install-box">
+      <div class="ios-install-title">📲 ホーム画面に追加</div>
+      <ol class="ios-install-steps">
+        <li>画面下の <strong>共有ボタン</strong> をタップ<br><span class="ios-share-icon">⎙</span></li>
+        <li>「<strong>ホーム画面に追加</strong>」をタップ</li>
+        <li>右上の「<strong>追加</strong>」をタップ</li>
+      </ol>
+      <p class="ios-install-note">追加するとアイコンからすぐ起動できます</p>
+      <button id="iosInstallClose" class="primary" style="width:100%;margin-top:8px">閉じる</button>
+    </div>
+  </div>
   <main id="docList" class="doc-list"></main>
   <div id="emptyState" class="empty-state" hidden>
     <div class="empty-icon">📂</div>

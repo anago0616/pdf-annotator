@@ -1716,6 +1716,53 @@ if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 
+/* ---- インストールバナー ---- */
+(function () {
+  // すでにスタンドアロン(インストール済み)なら何もしない
+  if (window.matchMedia('(display-mode: standalone)').matches || navigator.standalone) return;
+  if (localStorage.getItem('pdfnote_install_dismissed')) return;
+
+  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.MSStream;
+  const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+
+  let deferredPrompt = null;
+
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
+    showInstallBanner('アプリとしてインストールできます');
+  });
+
+  $('installBtn').addEventListener('click', async () => {
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      const { outcome } = await deferredPrompt.userChoice;
+      deferredPrompt = null;
+      if (outcome === 'accepted') $('installBanner').hidden = true;
+    } else if (isIOS && isSafari) {
+      $('iosInstallOverlay').hidden = false;
+    }
+  });
+
+  $('installDismiss').addEventListener('click', () => {
+    $('installBanner').hidden = true;
+    localStorage.setItem('pdfnote_install_dismissed', '1');
+  });
+
+  $('iosInstallClose').addEventListener('click', () => { $('iosInstallOverlay').hidden = true; });
+
+  function showInstallBanner(msg) {
+    $('installBannerMsg').textContent = msg;
+    $('installBanner').hidden = false;
+  }
+
+  // iOS Safari: beforeinstallpromptは来ないので直接バナー表示
+  if (isIOS && isSafari) {
+    showInstallBanner('ホーム画面に追加してアプリとして使えます');
+    $('installBtn').textContent = '手順を見る';
+  }
+})();
+
 /* テスト用フック */
 window.__app = { importPdf, openEditor, renderHome, state, dbAll, exportAnnotatedPdf, shareFolder, joinFolder, unshareFolder, conns };
 
