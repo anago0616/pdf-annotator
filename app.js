@@ -1343,9 +1343,23 @@ function connectRoom(code) {
   const sock = new WebSocket(`${proto}://${location.host}/ws?code=${code}&name=${encodeURIComponent(getGuestName())}`);
   c.ws = sock;
 
+  let lastPong = Date.now();
+  const heartbeat = setInterval(() => {
+    if (c.ws !== sock) { clearInterval(heartbeat); return; }
+    if (sock.readyState !== 1) { clearInterval(heartbeat); return; }
+    if (Date.now() - lastPong > 55000) {
+      // pong が 55 秒以上来ない → ゾンビ接続とみなして切断・再接続
+      clearInterval(heartbeat);
+      sock.close();
+      return;
+    }
+    sock.send(JSON.stringify({ type: 'ping' }));
+  }, 25000);
+
   sock.onmessage = (e) => {
     let msg;
     try { msg = JSON.parse(e.data); } catch { return; }
+    if (msg.type === 'pong') { lastPong = Date.now(); return; }
     if (msg.type === 'init') {
       const all = msg.annotations || {};
       const dn = msg.docNames || {};
@@ -1479,7 +1493,10 @@ async function addDocToFolderShare(doc) {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(libDocPayload(doc))
     });
-    if (res.status === 404) await recreateRoom(code);
+    if (res.status === 404) {
+      const ok = await recreateRoom(code);
+      if (ok) { closeConn(code); setTimeout(() => connectRoom(code), 600); }
+    }
   } catch (_) {}
 }
 
@@ -1739,7 +1756,13 @@ window.addEventListener('keydown', (e) => {
 document.addEventListener('gesturestart', (e) => { if (inEditor()) e.preventDefault(); }); // Safari のピンチズーム抑止
 // アプリが前面に復帰/再表示されたら固まり状態を解除
 // (iOSはPWAを再読込せず復帰するため、落として開き直しても残骸が残ることがある)
-document.addEventListener('visibilitychange', () => { if (!document.hidden) resetGestureState(); });
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    resetGestureState();
+    // スマホでバックグラウンドから戻ったとき: 切れたWS接続を検出して再接続・欠落ファイルを同期
+    ensureConnections();
+  }
+});
 window.addEventListener('focus', resetGestureState);
 window.addEventListener('pageshow', resetGestureState);
 const splashStart = Date.now();

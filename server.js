@@ -342,7 +342,9 @@ wss.on('connection', (ws, req) => {
   ws.on('message', (raw) => {
     let msg;
     try { msg = JSON.parse(raw.toString()); } catch { return; }
-    if (msg.type === 'op' && msg.docId && msg.page && msg.op) {
+    if (msg.type === 'ping') {
+      ws.send(JSON.stringify({ type: 'pong' }));
+    } else if (msg.type === 'op' && msg.docId && msg.page && msg.op) {
       if (applyOp(room, msg.docId, msg.page, msg.op)) {
         broadcast(room, { type: 'op', docId: msg.docId, page: msg.page, op: msg.op }, ws);
         if (msg.seq != null) ws.send(JSON.stringify({ type: 'ack', seq: msg.seq }));
