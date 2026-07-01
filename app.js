@@ -1718,53 +1718,60 @@ if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.
 
 /* ---- インストールバナー ---- */
 {
-  let deferredPrompt = null;
+  let _deferredPrompt = null;
+  let _bannerDismissed = false;
 
-  const isStandalone = () =>
-    window.matchMedia('(display-mode: standalone)').matches ||
-    window.matchMedia('(display-mode: fullscreen)').matches ||
-    navigator.standalone === true;
+  function _isStandalone() {
+    try {
+      return window.matchMedia('(display-mode: standalone)').matches ||
+             window.matchMedia('(display-mode: fullscreen)').matches ||
+             navigator.standalone === true;
+    } catch { return false; }
+  }
 
-  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
-  const isSafari = /safari/i.test(navigator.userAgent) && !/chrome|crios|fxios|edgios/i.test(navigator.userAgent);
+  function _isDismissed() {
+    if (_bannerDismissed) return true;
+    try { return !!localStorage.getItem('pdfnote_install_dismissed'); } catch { return false; }
+  }
 
-  // ✕ボタン・iOS閉じるボタン: 常に登録(IIFE早期returnで登録漏れしないよう外に出す)
-  $('installDismiss').addEventListener('click', () => {
+  function _dismiss() {
+    _bannerDismissed = true;
     $('installBanner').hidden = true;
-    localStorage.setItem('pdfnote_install_dismissed', '1');
-  });
-  $('iosInstallClose').addEventListener('click', () => { $('iosInstallOverlay').hidden = true; });
-  $('installBtn').addEventListener('click', async () => {
-    if (deferredPrompt) {
-      deferredPrompt.prompt();
-      const { outcome } = await deferredPrompt.userChoice;
-      deferredPrompt = null;
-      if (outcome === 'accepted') $('installBanner').hidden = true;
+    try { localStorage.setItem('pdfnote_install_dismissed', '1'); } catch {}
+  }
+
+  function _showBanner(msg, btnLabel) {
+    if (_isStandalone() || _isDismissed()) return;
+    $('installBannerMsg').textContent = msg;
+    $('installBtn').textContent = btnLabel;
+    $('installBanner').hidden = false;
+  }
+
+  $('installDismiss').onclick = () => _dismiss();
+  $('iosInstallClose').onclick = () => { $('iosInstallOverlay').hidden = true; };
+  $('installBtn').onclick = async () => {
+    if (_deferredPrompt) {
+      _deferredPrompt.prompt();
+      const { outcome } = await _deferredPrompt.userChoice;
+      _deferredPrompt = null;
+      if (outcome === 'accepted') _dismiss();
     } else {
       $('iosInstallOverlay').hidden = false;
     }
-  });
+  };
 
-  // Android/Chrome: インストール可能になったらバナー表示
   window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault();
-    deferredPrompt = e;
-    if (!isStandalone() && !localStorage.getItem('pdfnote_install_dismissed')) {
-      $('installBannerMsg').textContent = 'アプリとしてインストールできます';
-      $('installBtn').textContent = 'インストール';
-      $('installBanner').hidden = false;
-    }
+    _deferredPrompt = e;
+    _showBanner('アプリとしてインストールできます', 'インストール');
   });
 
-  // インストール完了したらバナーを消す
-  window.addEventListener('appinstalled', () => { $('installBanner').hidden = true; });
+  window.addEventListener('appinstalled', _dismiss);
 
-  // iOS Safari: スタンドアロンでなければバナー表示
-  if (isIOS && isSafari && !isStandalone() && !localStorage.getItem('pdfnote_install_dismissed')) {
-    $('installBannerMsg').textContent = 'ホーム画面に追加してアプリとして使えます';
-    $('installBtn').textContent = '手順を見る';
-    $('installBanner').hidden = false;
-  }
+  // iOS Safari
+  const _isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const _isIOSSafari = _isIOS && /safari/i.test(navigator.userAgent) && !/chrome|crios|fxios|edgios/i.test(navigator.userAgent);
+  if (_isIOSSafari) _showBanner('ホーム画面に追加してアプリとして使えます', '手順を見る');
 }
 
 /* テスト用フック */
