@@ -1716,63 +1716,6 @@ if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 
-/* ---- インストールバナー ---- */
-{
-  let _deferredPrompt = null;
-  let _bannerDismissed = false;
-
-  function _isStandalone() {
-    try {
-      return window.matchMedia('(display-mode: standalone)').matches ||
-             window.matchMedia('(display-mode: fullscreen)').matches ||
-             navigator.standalone === true;
-    } catch { return false; }
-  }
-
-  function _isDismissed() {
-    if (_bannerDismissed) return true;
-    try { return !!localStorage.getItem('pdfnote_install_dismissed'); } catch { return false; }
-  }
-
-  function _dismiss() {
-    _bannerDismissed = true;
-    $('installBanner').hidden = true;
-    try { localStorage.setItem('pdfnote_install_dismissed', '1'); } catch {}
-  }
-
-  function _showBanner(msg, btnLabel) {
-    if (_isStandalone() || _isDismissed()) return;
-    $('installBannerMsg').textContent = msg;
-    $('installBtn').textContent = btnLabel;
-    $('installBanner').hidden = false;
-  }
-
-  $('installDismiss').onclick = () => _dismiss();
-  $('iosInstallClose').onclick = () => { $('iosInstallOverlay').hidden = true; };
-  $('installBtn').onclick = async () => {
-    if (_deferredPrompt) {
-      _deferredPrompt.prompt();
-      const { outcome } = await _deferredPrompt.userChoice;
-      _deferredPrompt = null;
-      if (outcome === 'accepted') _dismiss();
-    } else {
-      $('iosInstallOverlay').hidden = false;
-    }
-  };
-
-  window.addEventListener('beforeinstallprompt', (e) => {
-    e.preventDefault();
-    _deferredPrompt = e;
-    _showBanner('アプリとしてインストールできます', 'インストール');
-  });
-
-  window.addEventListener('appinstalled', _dismiss);
-
-  // iOS Safari
-  const _isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
-  const _isIOSSafari = _isIOS && /safari/i.test(navigator.userAgent) && !/chrome|crios|fxios|edgios/i.test(navigator.userAgent);
-  if (_isIOSSafari) _showBanner('ホーム画面に追加してアプリとして使えます', '手順を見る');
-}
 
 /* テスト用フック */
 window.__app = { importPdf, openEditor, renderHome, state, dbAll, exportAnnotatedPdf, shareFolder, joinFolder, unshareFolder, conns };
