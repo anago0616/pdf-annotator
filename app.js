@@ -418,6 +418,7 @@ $('importOkBtn').addEventListener('click', async () => {
 async function openEditor(id) {
   const doc = await dbGet(id);
   if (!doc) return showToast('文書が見つかりません');
+  localStorage.setItem('pdfnote_last_doc', id);
   state.doc = doc;
   state.zoom = 1;
   state.undoStack = [];
@@ -442,6 +443,7 @@ function backToHome() {
   if (state.doc) { state.doc.updatedAt = Date.now(); dbPut(state.doc); }
   if (state.pdf) { try { state.pdf.destroy(); } catch (_) {} state.pdf = null; }
   state.doc = null;
+  localStorage.removeItem('pdfnote_last_doc');
   renderHome();
   applySyncUI();
 }
@@ -1766,7 +1768,13 @@ document.addEventListener('visibilitychange', () => {
 window.addEventListener('focus', resetGestureState);
 window.addEventListener('pageshow', resetGestureState);
 const splashStart = Date.now();
-Promise.resolve(renderHome()).finally(() => {
+Promise.resolve(renderHome()).finally(async () => {
+  // 最後に開いていた文書を自動で再開
+  const lastId = localStorage.getItem('pdfnote_last_doc');
+  if (lastId) {
+    const doc = await dbGet(lastId);
+    if (doc) openEditor(lastId);
+  }
   // 最低0.7秒は表示してチラつきを防ぐ
   setTimeout(hideSplash, Math.max(0, 700 - (Date.now() - splashStart)));
 });
