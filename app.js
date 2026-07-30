@@ -1573,14 +1573,21 @@ async function shareFolder(category) {
     ensureConnections();
     return code;
   }
-  showToast('共有を準備しています…');
+  showToast(`共有を準備しています… (0 / ${docs.length})`);
+  // まず1件だけでルームを作り、残りは1件ずつ送る(巨大な単一リクエストを避ける)
   const res = await fetch('/api/share', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: category, docs: docs.map(d => ({ ...libDocPayload(d), id: d.id })) })
+    body: JSON.stringify({ name: category, docs: [{ ...libDocPayload(docs[0]), id: docs[0].id }] })
   });
   if (!res.ok) throw new Error('share failed: ' + res.status);
   const { code } = await res.json();
-  for (const d of docs) { d.shareCode = code; d.remoteId = d.id; await dbPut(d); }
+  docs[0].shareCode = code; docs[0].remoteId = docs[0].id; await dbPut(docs[0]);
+  for (let i = 1; i < docs.length; i++) {
+    const d = docs[i];
+    d.shareCode = code; d.remoteId = d.id; await dbPut(d);
+    await addDocToFolderShare(d);
+    showToast(`共有を準備しています… (${i + 1} / ${docs.length})`);
+  }
   setFolderCode(category, code);
   ensureConnections();
   renderHome();

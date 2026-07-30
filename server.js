@@ -34,8 +34,8 @@ if (USE_R2) {
   console.log('☁️  R2ストレージ使用中');
 }
 
-async function r2Put(key, body) {
-  await s3.send(new PutObjectCommand({ Bucket: R2_BUCKET, Key: key, Body: body, ContentType: 'application/json' }));
+async function r2Put(key, body, contentType = 'application/json') {
+  await s3.send(new PutObjectCommand({ Bucket: R2_BUCKET, Key: key, Body: body, ContentType: contentType }));
 }
 
 async function r2Get(key) {
@@ -54,10 +54,39 @@ async function r2Delete(key) {
   await s3.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: key }));
 }
 
-async function persistRoomR2(room) {
-  const { clients, saveTimer, ...data } = room;
-  data.updatedAt = Date.now();
-  await r2Put(`pdf-data/${room.code}.json`, JSON.stringify(data));
+/* ---- PDF本体(blob)の保存 ----
+ * PDFはメモリに常駐させず1件ずつ外部に置き、必要になったときだけ読み出す。
+ * ルーム情報(名前・カテゴリ・注釈)だけをメモリに持つことで消費を大幅に減らす。
+ *   R2      : pdf-blobs/<code>/<docId>.b64
+ *   ローカル : data/blobs/<code>/<docId>.b64
+ */
+const BLOB_DIR = path.join(DATA_DIR, 'blobs');
+const blobKey  = (code, docId) => `pdf-blobs/${code}/${encodeURIComponent(docId)}.b64`;
+const blobPath = (code, docId) => path.join(BLOB_DIR, code, encodeURIComponent(docId) + '.b64');
+
+async function blobPut(code, docId, b64) {
+  if (USE_R2) return r2Put(blobKey(code, docId), b64, 'text/plain');
+  const p = blobPath(code, docId);
+  await fs.promises.mkdir(path.dirname(p), { recursive: true });
+  await fs.promises.writeFile(p, b64);
+}
+
+async function blobGet(code, docId) {
+  if (USE_R2) return r2Get(blobKey(code, docId));
+  return fs.promises.readFile(blobPath(code, docId), 'utf8');
+}
+
+async function blobDelete(code, docId) {
+  try {
+    if (USE_R2) await r2Delete(blobKey(code, docId));
+    else await fs.promises.unlink(blobPath(code, docId));
+  } catch (_) { /* 既に無いだけなら無視 */ }
+}
+
+// 文書のPDFを取り出す。移行前(メモリ上にpdfが残っている)ならそちらを使う。
+async function readDocPdf(code, docId, doc) {
+  if (doc && typeof doc.pdf === 'string' && doc.pdf) return doc.pdf;
+  return blobGet(code, docId);
 }
 
 async function loadRoomsFromR2() {
@@ -124,20 +153,48 @@ for (const f of fs.readdirSync(DATA_DIR)) {
 }
 if (!USE_R2) console.log(`${rooms.size} 件の共有ルームを復元しました`);
 
+// ルーム情報(PDF本体を含まない)を保存する
+async function persistRoomNow(room) {
+  const { clients, saveTimer, ...data } = room;
+  data.updatedAt = Date.now();
+  const json = JSON.stringify(data);
+  if (USE_R2) await r2Put(`pdf-data/${room.code}.json`, json);
+  else await fs.promises.writeFile(path.join(DATA_DIR, room.code + '.json'), json);
+}
+
 function persistRoom(room) {
   clearTimeout(room.saveTimer);
   room.saveTimer = setTimeout(() => {
-    const { clients, saveTimer, ...data } = room;
-    data.updatedAt = Date.now();
-    if (USE_R2) {
-      r2Put(`pdf-data/${room.code}.json`, JSON.stringify(data))
-        .catch(e => console.error('R2保存失敗:', room.code, e.message));
-    } else {
-      fs.writeFile(path.join(DATA_DIR, room.code + '.json'), JSON.stringify(data), (err) => {
-        if (err) console.error('保存失敗:', room.code, err.message);
-      });
-    }
+    persistRoomNow(room).catch(e => console.error('保存失敗:', room.code, e.message));
   }, 800);
+}
+
+/* ---- 旧形式(PDFをルーム情報に含む)からの移行 ----
+ * 起動後に1件ずつPDFを外部へ書き出し、メモリから外す。
+ */
+async function migrateRoomBlobs(room) {
+  let n = 0;
+  for (const [id, d] of Object.entries(room.docs || {})) {
+    if (typeof d.pdf !== 'string' || !d.pdf) continue;
+    try {
+      await blobPut(room.code, id, d.pdf);
+      delete d.pdf; // メモリから解放
+      n++;
+    } catch (e) {
+      console.error('PDF移行失敗:', room.code, id, e.message);
+    }
+  }
+  if (n) {
+    try { await persistRoomNow(room); } catch (e) { console.error('移行後の保存失敗:', room.code, e.message); }
+    console.log(`PDF移行: ${room.code} (${n}件)`);
+  }
+  return n;
+}
+
+async function migrateAllBlobs() {
+  let total = 0;
+  for (const room of rooms.values()) total += await migrateRoomBlobs(room);
+  if (total) console.log(`PDF本体を外部保存へ移行しました: 合計 ${total} 件`);
 }
 
 function newCode() {
@@ -196,28 +253,27 @@ const server = http.createServer(async (req, res) => {
     try {
       const body = JSON.parse((await readBody(req)).toString('utf8'));
       if (!Array.isArray(body.docs) || body.docs.length === 0) return sendJson(res, 400, { error: '文書がありません' });
-      const docs = {};
       for (const d of body.docs) {
         if (!d.id || typeof d.pdf !== 'string') return sendJson(res, 400, { error: '文書データが不正です' });
-        docs[d.id] = { name: String(d.name || '無題'), category: String(d.category || '未分類'), pdf: d.pdf, annotations: d.annotations || {} };
       }
       const wantCode = (typeof body.code === 'string' && /^[A-Za-z0-9]{6}$/.test(body.code)) ? body.code.toUpperCase() : null;
       let room = wantCode ? rooms.get(wantCode) : null;
-      if (room) {
-        // 既存ルームへ統合(まだ無い文書だけ追加。削除済みは復活させない。既存文書の注釈は維持)
-        for (const [id, d] of Object.entries(docs)) {
-          if (!room.docs[id] && !room.deleted.includes(id)) room.docs[id] = d;
-        }
-        persistRoom(room);
-        console.log('ルーム統合:', room.code);
-        return sendJson(res, 200, { code: room.code });
+      const isNew = !room;
+      if (isNew) {
+        room = { code: wantCode || newCode(), name: String(body.name || '無題'), docs: {}, deleted: [], clients: new Set(), saveTimer: null };
       }
-      const code = wantCode || newCode();
-      room = { code, name: String(body.name || '無題'), docs, deleted: [], clients: new Set(), saveTimer: null };
-      rooms.set(code, room);
+      // 既存ルームへは、まだ無い文書だけ追加(削除済みは復活させない・既存の注釈は維持)
+      let added = 0;
+      for (const d of body.docs) {
+        if (room.docs[d.id] || room.deleted.includes(d.id)) continue;
+        await blobPut(room.code, d.id, d.pdf); // PDF本体は外部へ
+        room.docs[d.id] = { name: String(d.name || '無題'), category: String(d.category || '未分類'), annotations: d.annotations || {} };
+        added++;
+      }
+      if (isNew) rooms.set(room.code, room);
       persistRoom(room);
-      console.log((wantCode ? 'ルーム復元:' : 'ルーム作成:'), code, room.name, `(${body.docs.length}文書)`);
-      return sendJson(res, 200, { code });
+      console.log(isNew ? ((wantCode ? 'ルーム復元:' : 'ルーム作成:') + ` ${room.code} ${room.name} (${added}文書)`) : `ルーム統合: ${room.code} (+${added}文書)`);
+      return sendJson(res, 200, { code: room.code });
     } catch (e) {
       return sendJson(res, 400, { error: e.message });
     }
@@ -231,7 +287,8 @@ const server = http.createServer(async (req, res) => {
     try {
       const d = JSON.parse((await readBody(req)).toString('utf8'));
       if (!d.id || typeof d.pdf !== 'string') return sendJson(res, 400, { error: '文書データが不正です' });
-      room.docs[d.id] = { name: String(d.name || '無題'), category: String(d.category || '未分類'), pdf: d.pdf, annotations: d.annotations || {} };
+      await blobPut(room.code, d.id, d.pdf); // PDF本体は外部へ
+      room.docs[d.id] = { name: String(d.name || '無題'), category: String(d.category || '未分類'), annotations: d.annotations || {} };
       persistRoom(room);
       broadcast(room, { type: 'doc:add', docId: d.id, name: room.docs[d.id].name });
       console.log('文書追加:', room.code, d.name);
@@ -290,6 +347,7 @@ const server = http.createServer(async (req, res) => {
     delete room.docs[docId];
     if (!room.deleted.includes(docId)) room.deleted.push(docId);
     if (room.deleted.length > 500) room.deleted.shift(); // 際限なく増えないように
+    blobDelete(room.code, docId); // PDF本体も片付ける(失敗しても続行)
     persistRoom(room);
     broadcast(room, { type: 'doc:delete', docId });
     console.log('文書削除:', room.code, docId);
@@ -309,19 +367,34 @@ const server = http.createServer(async (req, res) => {
   // 個別文書の取得(doc:add通知を受けた参加者用)
   const mDoc = url.pathname.match(/^\/api\/share\/([A-Za-z0-9]{6})\/docs\/([^/]+)$/);
   if (req.method === 'GET' && mDoc) {
-    const room = rooms.get(mDoc[1].toUpperCase());
-    const doc = room && room.docs[decodeURIComponent(mDoc[2])];
+    const code = mDoc[1].toUpperCase();
+    const docId = decodeURIComponent(mDoc[2]);
+    const room = rooms.get(code);
+    const doc = room && room.docs[docId];
     if (!doc) return sendJson(res, 404, { error: '文書が見つかりません' });
-    return sendJson(res, 200, { id: decodeURIComponent(mDoc[2]), name: doc.name, category: doc.category || '未分類', pdf: doc.pdf, annotations: doc.annotations });
+    let pdf;
+    try { pdf = await readDocPdf(code, docId, doc); } // 必要なときだけPDFを読み出す
+    catch (e) { console.error('PDF読み出し失敗:', code, docId, e.message); return sendJson(res, 404, { error: 'PDFが見つかりません' }); }
+    return sendJson(res, 200, { id: docId, name: doc.name, category: doc.category || '未分類', pdf, annotations: doc.annotations });
   }
 
-  // ルーム取得(参加: 全文書)
+  // ルーム取得(旧版クライアントの参加用: 全文書)
+  // 現行クライアントは /meta + 1件ずつ取得を使う。ここは1件ずつ書き出してメモリを抑える。
   const m = url.pathname.match(/^\/api\/share\/([A-Za-z0-9]{6})$/);
   if (req.method === 'GET' && m) {
     const room = rooms.get(m[1].toUpperCase());
     if (!room) return sendJson(res, 404, { error: '共有コードが見つかりません' });
-    const docs = Object.entries(room.docs).map(([id, d]) => ({ id, name: d.name, category: d.category || '未分類', pdf: d.pdf, annotations: d.annotations }));
-    return sendJson(res, 200, { code: room.code, name: room.name, docs });
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.write(`{"code":${JSON.stringify(room.code)},"name":${JSON.stringify(room.name)},"docs":[`);
+    let first = true;
+    for (const [id, d] of Object.entries(room.docs)) {
+      let pdf;
+      try { pdf = await readDocPdf(room.code, id, d); } catch (_) { continue; }
+      if (!first) res.write(',');
+      first = false;
+      res.write(JSON.stringify({ id, name: d.name, category: d.category || '未分類', pdf, annotations: d.annotations }));
+    }
+    return res.end(']}');
   }
 
   // 死活確認(自己ping・監視用。軽量)
@@ -388,6 +461,8 @@ async function startServer() {
   server.listen(PORT, () => {
     console.log(`PDFノート サーバー起動: http://localhost:${PORT}`);
   });
+  // 旧形式のPDFを外部保存へ移す(起動をブロックしないよう配信開始後に実施)
+  migrateAllBlobs().catch(e => console.error('PDF移行に失敗:', e.message));
 }
 
 startServer();
