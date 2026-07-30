@@ -1698,6 +1698,30 @@ $('shareStopBtn').addEventListener('click', () => {
   $('shareDialog').hidden = true;
   if (dialogCategory && confirm('共有を解除しますか？\nこの端末から共有ファイルがすべて削除されます。\n(他の端末のファイルは残ります)')) unshareFolder(dialogCategory);
 });
+$('sharePushBtn').addEventListener('click', async () => {
+  if (!dialogCategory) return;
+  const btn = $('sharePushBtn');
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = '反映中…';
+  try {
+    const n = await pushFolderLayout(dialogCategory);
+    showToast(`${n}件のフォルダ配置を全員に反映しました`);
+  } catch (_) {
+    showToast('反映に失敗しました');
+  } finally {
+    btn.disabled = false; btn.textContent = label;
+  }
+});
+
+// この端末のフォルダ配置(各文書のcategory)を共有相手全員に送る
+async function pushFolderLayout(category) {
+  const docs = (await dbAll()).filter(d => {
+    const c = d.category || '未分類';
+    return d.shareCode && d.remoteId && (c === category || c.startsWith(category + '/'));
+  });
+  for (const d of docs) await moveDocOnServer(d);
+  return docs.length;
+}
 
 // エディタの🔗: 今開いている文書のフォルダを共有/コード表示
 $('liveBtn').addEventListener('click', async () => {

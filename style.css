@@ -253,6 +253,15 @@ body.editing { touch-action: pan-x pan-y; }
   border-radius: 10px; padding: 14px 6px; margin-bottom: 12px;
   user-select: all;
 }
+.share-push-btn {
+  width: 100%; padding: 12px; margin-bottom: 6px;
+  font-size: 15px; font-weight: 600;
+  color: var(--primary); background: #eef3fc;
+  border: 1.5px solid var(--primary); border-radius: 10px;
+  cursor: pointer;
+}
+.share-push-btn:disabled { opacity: .6; cursor: default; }
+.share-push-desc { margin: 0 0 14px; font-size: 12px; }
 
 .page-container {
   flex: 1; overflow: auto;
