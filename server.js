@@ -261,6 +261,26 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // 文書のフォルダ移動(共有相手にも反映)
+  const mMove = url.pathname.match(/^\/api\/share\/([A-Za-z0-9]{6})\/docs\/([^/]+)\/move$/);
+  if (req.method === 'POST' && mMove) {
+    const room = rooms.get(mMove[1].toUpperCase());
+    if (!room) return sendJson(res, 404, { error: '共有コードが見つかりません' });
+    const docId = decodeURIComponent(mMove[2]);
+    if (!room.docs[docId]) return sendJson(res, 404, { error: '文書が見つかりません' });
+    try {
+      const body = JSON.parse((await readBody(req)).toString('utf8'));
+      const category = String(body.category || '未分類');
+      room.docs[docId].category = category;
+      persistRoom(room);
+      broadcast(room, { type: 'doc:move', docId, category });
+      console.log('フォルダ移動:', room.code, docId, '→', category);
+      return sendJson(res, 200, { ok: true });
+    } catch (e) {
+      return sendJson(res, 400, { error: e.message });
+    }
+  }
+
   // 文書の削除(共有相手にも反映)
   const mDel = url.pathname.match(/^\/api\/share\/([A-Za-z0-9]{6})\/docs\/([^/]+)$/);
   if (req.method === 'DELETE' && mDel) {
@@ -334,8 +354,9 @@ wss.on('connection', (ws, req) => {
   const names = () => [...room.clients].map(c => c.username);
   const allAnnotations = {};
   const docNames = {};
-  for (const [id, d] of Object.entries(room.docs)) { allAnnotations[id] = d.annotations; docNames[id] = d.name; }
-  ws.send(JSON.stringify({ type: 'init', annotations: allAnnotations, docNames, deleted: room.deleted, members: room.clients.size, names: names() }));
+  const docCats = {};
+  for (const [id, d] of Object.entries(room.docs)) { allAnnotations[id] = d.annotations; docNames[id] = d.name; docCats[id] = d.category || '未分類'; }
+  ws.send(JSON.stringify({ type: 'init', annotations: allAnnotations, docNames, docCats, deleted: room.deleted, members: room.clients.size, names: names() }));
   broadcast(room, { type: 'members', count: room.clients.size, names: names() }, ws);
   console.log(`参加: ${code} ${user} (${room.clients.size}人)`);
 

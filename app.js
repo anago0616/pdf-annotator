@@ -220,6 +220,7 @@ function renderFolderTree(node, depth, list, collapsed, allDocs) {
       if (c === node.fullPath || c.startsWith(node.fullPath + '/')) {
         d.category = newPath + c.slice(node.fullPath.length);
         await dbPut(d);
+        await moveDocOnServer(d);
       }
     }
     const ef = JSON.parse(localStorage.getItem('pdfnote_folders') || '[]');
@@ -254,7 +255,7 @@ function renderFolderTree(node, depth, list, collapsed, allDocs) {
       if (choice) {
         await deleteDocs(affected);
       } else {
-        for (const d of affected) { d.category = '未分類'; await dbPut(d); }
+        for (const d of affected) { d.category = '未分類'; await dbPut(d); await moveDocOnServer(d); }
       }
     }
     // localStorage からフォルダ(サブフォルダ含む)を削除
@@ -331,7 +332,7 @@ function renderDocCard(d, list, allDocs) {
   });
   card.querySelector('.act-move').addEventListener('click', async () => {
     const dest = await pickFolder('📁 移動先フォルダ', d.category || '未分類');
-    if (dest != null) { d.category = dest; await dbPut(d); renderHome(); }
+    if (dest != null) { d.category = dest; await dbPut(d); await moveDocOnServer(d); renderHome(); }
   });
   card.querySelector('.act-share').addEventListener('click', () => shareDoc(d));
   card.querySelector('.act-delete').addEventListener('click', async () => {
@@ -1294,6 +1295,27 @@ async function renameLocalDoc(shareCode, remoteId, name) {
   if (!views.home.hidden) renderHome();
 }
 
+// doc:move通知: 共有相手が変更したフォルダ(category)をローカルに反映
+async function moveLocalDoc(shareCode, remoteId, category) {
+  const d = (await dbAll()).find(x => x.shareCode === shareCode && x.remoteId === remoteId);
+  if (!d || (d.category || '未分類') === category) return;
+  d.category = category;
+  await dbPut(d);
+  if (state.doc && state.doc.id === d.id) state.doc.category = category;
+  if (!views.home.hidden) renderHome();
+}
+
+// フォルダ移動を共有相手へ配信(共有中の文書のみ)
+async function moveDocOnServer(doc) {
+  if (!doc.shareCode || !doc.remoteId) return;
+  try {
+    await fetch(`/api/share/${doc.shareCode}/docs/${encodeURIComponent(doc.remoteId)}/move`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category: doc.category || '未分類' })
+    });
+  } catch (_) {}
+}
+
 // doc:delete通知: 共有相手が削除した文書をローカルからも削除
 async function deleteLocalDoc(shareCode, remoteId) {
   const d = (await dbAll()).find(x => x.shareCode === shareCode && x.remoteId === remoteId);
@@ -1365,6 +1387,7 @@ function connectRoom(code) {
     if (msg.type === 'init') {
       const all = msg.annotations || {};
       const dn = msg.docNames || {};
+      const dc = msg.docCats || {};
       const del = msg.deleted || [];
       for (const entry of pendingOps.filter(p => p.code === code)) {
         sock.send(JSON.stringify({ type: 'op', seq: entry.seq, docId: entry.docId, page: entry.page, op: entry.op }));
@@ -1382,6 +1405,7 @@ function connectRoom(code) {
           let dirty = false;
           if (all[s.remoteId] && JSON.stringify(s.annotations) !== JSON.stringify(all[s.remoteId])) { s.annotations = all[s.remoteId]; dirty = true; }
           if (dn[s.remoteId] && dn[s.remoteId] !== s.name) { s.name = dn[s.remoteId]; dirty = true; }
+          if (dc[s.remoteId] && dc[s.remoteId] !== (s.category || '未分類')) { s.category = dc[s.remoteId]; dirty = true; }
           if (dirty) await dbPut(s);
         }
         // サーバーにあってローカルにないドキュメントを受信(接続前に追加されたファイルを同期)
@@ -1412,6 +1436,8 @@ function connectRoom(code) {
       receiveSharedDoc(code, msg.docId);
     } else if (msg.type === 'doc:rename') {
       renameLocalDoc(code, msg.docId, msg.name);
+    } else if (msg.type === 'doc:move') {
+      moveLocalDoc(code, msg.docId, msg.category);
     } else if (msg.type === 'doc:delete') {
       deleteLocalDoc(code, msg.docId);
     }
@@ -1712,7 +1738,7 @@ $('bulkMove').addEventListener('click', async () => {
   if (dest == null) return;
   const all = await dbAll();
   const docs = all.filter(d => selectedIds.has(d.id));
-  for (const d of docs) { d.category = dest; await dbPut(d); }
+  for (const d of docs) { d.category = dest; await dbPut(d); await moveDocOnServer(d); }
   selectMode = false;
   selectedIds.clear();
   showToast(`${docs.length}件を「${dest}」に移動しました`);
