@@ -6,6 +6,14 @@ const MY_ID = (() => {
   return localStorage.getItem(k) || (() => { const v = Math.random().toString(36).slice(2, 10); localStorage.setItem(k, v); return v; })();
 })();
 
+/* ---- 管理者モード ----
+ * この端末に限り、他の人が書いた線やテキストも消せるようにする。
+ * ホーム画面のタイトルを長押しして切り替える(この端末のみ・他端末には影響しない)。
+ */
+let MASTER = (() => { try { return localStorage.getItem('pdfnote_master') === '1'; } catch (_) { return false; } })();
+// その注釈を編集・削除できるか(作成者が無い古い注釈は誰でも可)
+const canEditAnn = (o) => MASTER || !o.owner || o.owner === MY_ID;
+
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
@@ -647,7 +655,7 @@ function attachPointerHandlers(info) {
       const idx = hitText(ann, x, y);
       if (idx >= 0) {
         const t = ann.texts[idx];
-        if (t.owner && t.owner !== MY_ID) return; // 他端末のテキスト → 触れない
+        if (!canEditAnn(t)) return; // 他端末のテキスト → 触れない(管理者モードなら可)
         const wasSel = sel && sel.page === info.num && sel.index === idx;
         state.selectedText = { page: info.num, index: idx };
         pushUndo(info.num);
@@ -736,7 +744,7 @@ function eraseAt(info, x, y) {
   const ann = pageAnn(state.doc, info.num);
   const radius = 12 / state.zoom;
   const before = ann.strokes.length + ann.texts.length;
-  const isMine = o => !o.owner || o.owner === MY_ID;
+  const isMine = canEditAnn;
   ann.strokes = ann.strokes.filter(s => !isMine(s) || !s.points.some(p => Math.hypot(p[0] - x, p[1] - y) < radius));
   ann.texts = ann.texts.filter(t => {
     if (!isMine(t)) return true;
@@ -1746,6 +1754,37 @@ $('joinBtn').addEventListener('click', () => {
   if (code) joinFolder(code).catch(err => { console.error(err); showToast('参加に失敗しました'); });
 });
 
+/* ---- 管理者モードの切り替え(タイトルを長押し) ---- */
+function applyMasterUI() {
+  $('masterBadge').hidden = !MASTER;
+  $('masterState').hidden = !MASTER;
+}
+function toggleMaster() {
+  if (MASTER) {
+    if (!confirm('管理者モードを解除しますか？\n\n解除すると、他の人が書いた線やテキストは消せなくなります。')) return;
+    MASTER = false;
+    try { localStorage.removeItem('pdfnote_master'); } catch (_) {}
+    showToast('管理者モードを解除しました');
+  } else {
+    if (!confirm('この端末を管理者モードにしますか？\n\n他の人が書いた線やテキストも消せるようになります。\n(この端末だけの設定です)')) return;
+    MASTER = true;
+    try { localStorage.setItem('pdfnote_master', '1'); } catch (_) {}
+    showToast('管理者モードにしました');
+  }
+  applyMasterUI();
+}
+(() => {
+  const title = $('appTitle');
+  let timer = null;
+  const cancel = () => { clearTimeout(timer); timer = null; };
+  title.addEventListener('pointerdown', () => {
+    cancel();
+    timer = setTimeout(() => { timer = null; toggleMaster(); }, 1500);
+  });
+  for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) title.addEventListener(ev, cancel);
+})();
+applyMasterUI();
+
 /* ---- 一括選択・削除 ---- */
 $('selectBtn').addEventListener('click', () => {
   selectMode = !selectMode;
@@ -1794,7 +1833,7 @@ if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.
 
 
 /* テスト用フック */
-window.__app = { importPdf, openEditor, renderHome, state, dbAll, exportAnnotatedPdf, shareFolder, joinFolder, unshareFolder, conns };
+window.__app = { importPdf, openEditor, renderHome, state, dbAll, exportAnnotatedPdf, shareFolder, joinFolder, unshareFolder, conns, canEditAnn, toggleMaster, get master() { return MASTER; } };
 
 /* ================= 起動 ================= */
 function hideSplash() {

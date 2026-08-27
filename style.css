@@ -173,6 +173,19 @@ body.editing { touch-action: pan-x pan-y; }
 }
 .share-state.offline { color: #b3261e; background: #fdecec; }
 
+/* 管理者モード(この端末だけ他の人の書き込みも消せる) */
+.master-badge {
+  font-size: 11px; font-weight: 600; white-space: nowrap;
+  color: #8a5a00; background: #fff3d6;
+  border-radius: 10px; padding: 3px 8px;
+}
+.home-header-row .master-badge { margin-right: auto; }
+/* タイトル長押しで切り替えるため、選択やiOSのメニューを抑止 */
+#appTitle {
+  user-select: none; -webkit-user-select: none;
+  -webkit-touch-callout: none; cursor: default;
+}
+
 /* ---------- 共有ダイアログ ---------- */
 .share-dialog {
   position: fixed; inset: 0; z-index: 30;

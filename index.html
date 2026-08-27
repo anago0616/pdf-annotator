@@ -57,7 +57,8 @@
 <div id="homeView" class="view" hidden>
   <header class="home-header">
     <div class="home-header-row">
-      <h1>📄 PDFノート</h1>
+      <h1 id="appTitle">📄 PDFノート</h1>
+      <span id="masterBadge" class="master-badge" hidden>🔑 管理者</span>
       <button id="selectBtn" class="join-btn">☑ 選択</button>
       <button id="joinBtn" class="join-btn">🔗 参加</button>
     </div>
@@ -86,6 +87,7 @@
     <button id="backBtn" class="icon-btn" title="戻る">←</button>
     <span id="docTitle" class="doc-title"></span>
     <span id="shareState" class="share-state" hidden></span>
+    <span id="masterState" class="master-badge" hidden title="管理者モード: 他の人の書き込みも消せます">🔑</span>
     <span id="saveStatus" class="save-status"></span>
     <button id="liveBtn" class="icon-btn" title="共同編集">🔗</button>
     <button id="printBtn" class="icon-btn" title="印刷">🖨️</button>
