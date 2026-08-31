@@ -1,5 +1,9 @@
 'use strict';
 
+// アプリの版。ホーム画面に表示して、端末が最新版に更新されているか確認できるようにする。
+// (sw.js の CACHE と必ず揃えること)
+const APP_VERSION = 'v60';
+
 // このデバイス固有ID。自分が作成した注釈にのみ付与し、他端末の注釈は編集不可にする
 const MY_ID = (() => {
   const k = 'pdfnote_did';
@@ -1061,7 +1065,25 @@ const ZOOM_MIN = 0.5, ZOOM_MAX = 16; // 最大16倍(高倍率は端末上限内�
 $('zoomInBtn').addEventListener('click', () => changeZoom(1.25));
 $('zoomOutBtn').addEventListener('click', () => changeZoom(0.8));
 
+// ボタン連打でも再描画が何重にも重ならないようにまとめて処理する
+// (描き直しのたびに全ページ分を作り直すため、重なると一気にメモリを使ってしまう)
+let zoomBusy = false, zoomPending = 1;
 async function changeZoom(factor) {
+  zoomPending *= factor;
+  if (zoomBusy) return;
+  zoomBusy = true;
+  try {
+    while (zoomPending !== 1) {
+      const f = zoomPending;
+      zoomPending = 1;
+      await applyZoom(f);
+    }
+  } finally {
+    zoomBusy = false;
+  }
+}
+
+async function applyZoom(factor) {
   const container = $('pageContainer');
   // ビューポート中央を基点に拡大縮小
   const focusX = container.scrollLeft + container.clientWidth / 2;
@@ -1872,6 +1894,8 @@ $('joinBtn').addEventListener('click', () => {
   const code = prompt('共有コードを入力(6桁)');
   if (code) joinFolder(code).catch(err => { console.error(err); showToast('参加に失敗しました'); });
 });
+
+$('appVersion').textContent = APP_VERSION;
 
 /* ---- 管理者モードの切り替え(タイトルを長押し) ---- */
 function applyMasterUI() {

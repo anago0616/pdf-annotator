@@ -173,6 +173,8 @@ body.editing { touch-action: pan-x pan-y; }
 }
 .share-state.offline { color: #b3261e; background: #fdecec; }
 
+.app-version { opacity: .7; font-size: 11px; }
+
 /* 管理者モード(この端末だけ他の人の書き込みも消せる) */
 .master-badge {
   font-size: 11px; font-weight: 600; white-space: nowrap;
