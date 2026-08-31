@@ -430,7 +430,9 @@ async function openEditor(id) {
   if (!doc) return showToast('文書が見つかりません');
   localStorage.setItem('pdfnote_last_doc', id);
   state.doc = doc;
-  state.zoom = 1;
+  // 前回この文書を見ていた倍率・位置を復元する(再読み込みされても元の場所に戻る)
+  const saved = getViewStates()[id];
+  state.zoom = saved && saved.zoom ? Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, saved.zoom)) : 1;
   state.undoStack = [];
   state.selectedText = null;
   resetGestureState(); // 別ファイルを開くたびにジェスチャ状態をクリア(固まり対策)
@@ -444,7 +446,37 @@ async function openEditor(id) {
   applySyncUI();
   state.pdf = await pdfjsLib.getDocument({ data: doc.pdfData.slice(0) }).promise;
   await renderAllPages();
+  if (saved) { // 前回見ていた位置へ戻す
+    const c = $('pageContainer');
+    c.scrollTop = saved.top || 0;
+    c.scrollLeft = saved.left || 0;
+    updateVisiblePages();
+  }
   setTool('hand');
+}
+
+/* ---- 表示位置の記憶 ----
+ * 文書ごとに倍率とスクロール位置を覚えておき、次に開いたときに同じ場所を表示する。
+ * 何かの拍子にアプリが再読み込みされても、見ていた場所に戻れるようにするため。
+ */
+function getViewStates() {
+  try { return JSON.parse(localStorage.getItem('pdfnote_view') || '{}'); } catch (_) { return {}; }
+}
+function saveViewState() {
+  if (!state.doc || views.editor.hidden) return;
+  const c = $('pageContainer');
+  const m = getViewStates();
+  m[state.doc.id] = { zoom: state.zoom, top: c.scrollTop, left: c.scrollLeft, at: Date.now() };
+  const keys = Object.keys(m);
+  if (keys.length > 30) { // 古いものから捨てて増えすぎないようにする
+    keys.sort((a, b) => (m[b].at || 0) - (m[a].at || 0)).slice(30).forEach(k => delete m[k]);
+  }
+  try { localStorage.setItem('pdfnote_view', JSON.stringify(m)); } catch (_) {}
+}
+let viewSaveTimer = null;
+function scheduleViewSave() {
+  clearTimeout(viewSaveTimer);
+  viewSaveTimer = setTimeout(saveViewState, 400);
 }
 
 // エディタを閉じてホームへ(同期接続は維持)
@@ -1014,7 +1046,10 @@ $('widthSlider').addEventListener('input', (e) => {
 });
 
 // スクロールに追従して、画面に入ったページを用意し離れたページを解放する
-$('pageContainer').addEventListener('scroll', scheduleVisibleUpdate, { passive: true });
+$('pageContainer').addEventListener('scroll', () => {
+  scheduleVisibleUpdate();
+  scheduleViewSave(); // 見ている位置を覚えておく
+}, { passive: true });
 window.addEventListener('resize', () => {
   if (views.editor.hidden) return;
   measurePageOffsets();
@@ -1040,6 +1075,7 @@ async function changeZoom(factor) {
   container.scrollLeft = focusX * ratio - container.clientWidth / 2;
   container.scrollTop = focusY * ratio - container.clientHeight / 2;
   updateVisiblePages(); // 移動先のページを用意する
+  saveViewState();
 }
 
 /* ---- ピンチ操作(2本指で拡大縮小・パン) ---- */
@@ -1133,6 +1169,7 @@ function setupPinchZoom() {
     container2.scrollLeft = p.anchorX * committedK - (p.lastMx - cr.left);
     container2.scrollTop = p.anchorY * committedK - (p.lastMy - cr.top);
     updateVisiblePages(); // 移動先のページを用意する
+    saveViewState();
   };
 
   container.addEventListener('touchend', (e) => {
@@ -1937,12 +1974,15 @@ document.addEventListener('gesturestart', (e) => { if (inEditor()) e.preventDefa
 // アプリが前面に復帰/再表示されたら固まり状態を解除
 // (iOSはPWAを再読込せず復帰するため、落として開き直しても残骸が残ることがある)
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) {
-    resetGestureState();
-    // スマホでバックグラウンドから戻ったとき: 切れたWS接続を検出して再接続・欠落ファイルを同期
-    ensureConnections();
+  if (document.hidden) {
+    saveViewState(); // 裏に回った時点の位置を確実に残す(このまま終了させられても戻れるように)
+    return;
   }
+  resetGestureState();
+  // スマホでバックグラウンドから戻ったとき: 切れたWS接続を検出して再接続・欠落ファイルを同期
+  ensureConnections();
 });
+window.addEventListener('pagehide', saveViewState);
 window.addEventListener('focus', resetGestureState);
 window.addEventListener('pageshow', resetGestureState);
 const splashStart = Date.now();
