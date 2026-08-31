@@ -58,7 +58,8 @@ const state = {
   pages: [],        // {wrap, canvas, overlay, viewport, num}
   editingText: null, // {page, index} 編集中テキスト / {page, x, y} 新規
   selectedText: null, // {page, index} 選択中テキスト(移動・リサイズ用)
-  pinching: false   // 2本指ピンチ操作中
+  pinching: false,  // 2本指ピンチ操作中
+  renderGen: 0      // 描画世代(文書切替・倍率変更で古い描画を破棄する)
 };
 
 // テキスト寸法の測定用(ページ座標系)
@@ -464,22 +465,27 @@ async function renderAllPages() {
   inner.id = 'pagesInner';
   container.appendChild(inner);
   state.pages = [];
+  const gen = ++state.renderGen;
   const baseDpr = window.devicePixelRatio || 1;
   // 高解像度のまま端末の上限を超えないようにする(超えるとブラウザが内部縮小してぼやける)
   // iOS Safari は概ね面積1677万px・1辺8192pxが上限
   const MAX_AREA = 16777216, MAX_DIM = 8192, OVERSAMPLE = 1.15;
+  // 1ページあたりの描画メモリ上限(約32MB)。これが無いと高倍率でページ数が多い文書を開いたとき
+  // 端末のメモリを使い切ってブラウザがページを破棄→再読み込みしてしまう。
+  const PAGE_PIXEL_CAP = 8000000;
   const availW = container.clientWidth - 16;
 
   for (let num = 1; num <= state.pdf.numPages; num++) {
     const page = await state.pdf.getPage(num);
+    if (gen !== state.renderGen) return; // 別の文書/倍率に切り替わった
     const vp1 = page.getViewport({ scale: 1 });
     if (num === 1) state.baseScale = availW / vp1.width;
     const scale = state.baseScale * state.zoom;
     const vp = page.getViewport({ scale });
 
-    // 実効解像度: 端末の上限(面積・1辺)を絶対に超えないようにしつつ、できるだけ高精細に
+    // 実効解像度: 端末の上限(面積・1辺)とメモリ上限を超えないようにしつつ、できるだけ高精細に
     const hardCap = Math.min(
-      Math.sqrt(MAX_AREA / (vp.width * vp.height)),
+      Math.sqrt(Math.min(MAX_AREA, PAGE_PIXEL_CAP) / (vp.width * vp.height)),
       MAX_DIM / vp.width,
       MAX_DIM / vp.height
     );
@@ -489,16 +495,13 @@ async function renderAllPages() {
 
     const wrap = document.createElement('div');
     wrap.className = 'page-wrap';
+    // 実体(バッファ)は画面に入ったときだけ確保する。CSSサイズは常に入れて配置を確定させる。
     const canvas = document.createElement('canvas');
-    canvas.width = Math.floor(vp.width * dpr);
-    canvas.height = Math.floor(vp.height * dpr);
     canvas.style.width = vp.width + 'px';
     canvas.style.height = vp.height + 'px';
 
     const overlay = document.createElement('canvas');
     overlay.className = 'overlay';
-    overlay.width = canvas.width;
-    overlay.height = canvas.height;
     overlay.style.width = canvas.style.width;
     overlay.style.height = canvas.style.height;
 
@@ -509,17 +512,85 @@ async function renderAllPages() {
     wrap.append(canvas, overlay, label);
     inner.appendChild(wrap);
 
-    // 入力ハンドラと注釈描画は PDF ラスタライズを待たずに先に有効化(即書き込み可)
-    const info = { wrap, canvas, overlay, num, scale, dpr, pageW: vp1.width, pageH: vp1.height };
+    // 入力ハンドラは PDF ラスタライズを待たずに先に有効化(即書き込み可)
+    const info = {
+      wrap, canvas, overlay, num, scale, dpr, pageW: vp1.width, pageH: vp1.height,
+      bw: Math.floor(vp.width * dpr), bh: Math.floor(vp.height * dpr),
+      painted: false, task: null, paintToken: 0, gen
+    };
     state.pages.push(info);
     attachPointerHandlers(info);
-    redrawOverlay(info);
-
-    // PDF本体の描画は並列・非同期(各ページ独立)
-    page.render({ canvasContext: canvas.getContext('2d'), viewport: vp, transform: [dpr, 0, 0, dpr, 0, 0] }).promise
-      .catch(err => { if (err && err.name !== 'RenderingCancelledException') console.error('PDF描画エラー p' + num, err); });
   }
+  measurePageOffsets();
+  updateVisiblePages();
   updateOverlayInteractivity();
+}
+
+/* ---- 表示中のページだけ描画する ----
+ * 全ページ分のキャンバスを同時に持つと、高倍率では端末のメモリを使い切って
+ * ブラウザにページごと破棄され「勝手に再読み込みされる」ため、
+ * 画面に入っているページだけ実体を確保し、離れたら解放する。
+ */
+function measurePageOffsets() {
+  const container = $('pageContainer');
+  const cTop = container.getBoundingClientRect().top;
+  for (const info of state.pages) {
+    const r = info.wrap.getBoundingClientRect();
+    info.top = r.top - cTop + container.scrollTop;
+    info.bottom = info.top + r.height;
+  }
+}
+
+async function paintPage(info) {
+  if (info.painted) return;
+  info.painted = true;
+  const token = ++info.paintToken; // 素早い往復で描画が二重に走らないようにする
+  info.canvas.width = info.bw; info.canvas.height = info.bh;
+  info.overlay.width = info.bw; info.overlay.height = info.bh;
+  redrawOverlay(info); // 注釈はPDFの描画を待たずに先に出す
+  try {
+    const page = await state.pdf.getPage(info.num);
+    if (!info.painted || info.paintToken !== token || info.gen !== state.renderGen) return; // 画面外になった/切り替わった
+    const task = page.render({
+      canvasContext: info.canvas.getContext('2d'),
+      viewport: page.getViewport({ scale: info.scale }),
+      transform: [info.dpr, 0, 0, info.dpr, 0, 0]
+    });
+    info.task = task;
+    await task.promise;
+  } catch (err) {
+    if (err && err.name !== 'RenderingCancelledException') console.error('PDF描画エラー p' + info.num, err);
+  } finally {
+    info.task = null;
+  }
+}
+
+function releasePage(info) {
+  if (!info.painted) return;
+  info.painted = false;
+  if (info.task) { try { info.task.cancel(); } catch (_) {} info.task = null; }
+  info.canvas.width = 0; info.canvas.height = 0;   // メモリを解放
+  info.overlay.width = 0; info.overlay.height = 0;
+}
+
+function updateVisiblePages() {
+  if (!state.pages.length || state.pinching) return;
+  const container = $('pageContainer');
+  const top = container.scrollTop, h = container.clientHeight;
+  const margin = h * 0.35; // 少し先まで用意しておく
+  for (const info of state.pages) {
+    if (info.bottom >= top - margin && info.top <= top + h + margin) paintPage(info);
+    else releasePage(info);
+  }
+}
+
+let visiblePending = false;
+function scheduleVisibleUpdate() {
+  if (visiblePending) return;
+  visiblePending = true;
+  const run = () => { if (!visiblePending) return; visiblePending = false; updateVisiblePages(); };
+  requestAnimationFrame(run);
+  setTimeout(run, 200); // 画面が裏に回るなどで rAF が止まっても取りこぼさないための保険
 }
 
 /* ---- 注釈の描画(オーバーレイ) ---- */
@@ -572,6 +643,7 @@ function drawAnnotations(ctx, ann, factor) {
 }
 
 function redrawOverlay(info) {
+  if (!info.painted) return; // 画面外のページは実体が無い
   const ctx = info.overlay.getContext('2d');
   ctx.clearRect(0, 0, info.overlay.width, info.overlay.height);
   const ann = pageAnn(state.doc, info.num);
@@ -941,6 +1013,14 @@ $('widthSlider').addEventListener('input', (e) => {
   $('widthLabel').textContent = e.target.value;
 });
 
+// スクロールに追従して、画面に入ったページを用意し離れたページを解放する
+$('pageContainer').addEventListener('scroll', scheduleVisibleUpdate, { passive: true });
+window.addEventListener('resize', () => {
+  if (views.editor.hidden) return;
+  measurePageOffsets();
+  scheduleVisibleUpdate();
+});
+
 /* ---- ズーム ---- */
 const ZOOM_MIN = 0.5, ZOOM_MAX = 16; // 最大16倍(高倍率は端末上限内に自動調整)
 $('zoomInBtn').addEventListener('click', () => changeZoom(1.25));
@@ -959,6 +1039,7 @@ async function changeZoom(factor) {
   const ratio = next / old;
   container.scrollLeft = focusX * ratio - container.clientWidth / 2;
   container.scrollTop = focusY * ratio - container.clientHeight / 2;
+  updateVisiblePages(); // 移動先のページを用意する
 }
 
 /* ---- ピンチ操作(2本指で拡大縮小・パン) ---- */
@@ -1051,6 +1132,7 @@ function setupPinchZoom() {
     const cr = container2.getBoundingClientRect();
     container2.scrollLeft = p.anchorX * committedK - (p.lastMx - cr.left);
     container2.scrollTop = p.anchorY * committedK - (p.lastMy - cr.top);
+    updateVisiblePages(); // 移動先のページを用意する
   };
 
   container.addEventListener('touchend', (e) => {

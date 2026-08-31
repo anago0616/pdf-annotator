@@ -282,6 +282,7 @@ body.editing { touch-action: pan-x pan-y; }
   -webkit-overflow-scrolling: touch;
   background: #d8dde5;
   touch-action: pan-x pan-y; /* 1本指スクロールは許可・ブラウザ標準ピンチは無効化(JSで処理) */
+  overscroll-behavior: contain; /* 上端で引っ張ったときの「引っ張って更新」を止める */
 }
 #pagesInner {
   width: fit-content;
