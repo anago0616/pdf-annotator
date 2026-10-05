@@ -13,6 +13,16 @@
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/icon-180.png">
 <link rel="stylesheet" href="style.css">
+<script>
+  // 「ホーム画面に追加できます」の通知は app.js の読み込みより先に届くことがあるため、
+  // ここで先に受け取って保持しておく。(以前ボタンを押しても何も起きなかったのはこれを取りこぼしていたため)
+  window.__deferredInstall = null;
+  window.addEventListener('beforeinstallprompt', function (e) {
+    e.preventDefault();
+    window.__deferredInstall = e;
+    window.dispatchEvent(new Event('pdfnote:installready'));
+  });
+</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 </head>
@@ -64,6 +74,11 @@
     </div>
     <p class="subtitle">PDFに書き込み・共有できるノートアプリ <span id="appVersion" class="app-version"></span></p>
   </header>
+  <div id="installBar" class="install-bar" hidden>
+    <span class="install-text">📲 ホーム画面に追加すると、アプリとして開けます</span>
+    <button id="installBtn" class="install-btn">追加する</button>
+    <button id="installClose" class="install-close" title="閉じる">✕</button>
+  </div>
   <main id="docList" class="doc-list"></main>
   <div id="emptyState" class="empty-state" hidden>
     <div class="empty-icon">📂</div>

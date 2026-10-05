@@ -2,7 +2,7 @@
 
 // アプリの版。ホーム画面に表示して、端末が最新版に更新されているか確認できるようにする。
 // (sw.js の CACHE と必ず揃えること)
-const APP_VERSION = 'v60';
+const APP_VERSION = 'v61';
 
 // このデバイス固有ID。自分が作成した注釈にのみ付与し、他端末の注釈は編集不可にする
 const MY_ID = (() => {
@@ -1896,6 +1896,47 @@ $('joinBtn').addEventListener('click', () => {
 });
 
 $('appVersion').textContent = APP_VERSION;
+
+/* ---- ホーム画面への追加(Android/Chrome) ----
+ * ブラウザから「追加できます」と通知が来たときだけ案内を出し、
+ * ボタン1回で標準の追加ダイアログを開く。
+ * 通知が来ない環境(追加できない・追加済み)では最初から出さない。
+ */
+let deferredInstall = window.__deferredInstall || null;
+let installDismissed = (() => {
+  try { return localStorage.getItem('pdfnote_install_dismissed') === '1'; } catch (_) { return false; }
+})();
+
+function isInstalled() {
+  try {
+    return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+  } catch (_) { return false; }
+}
+function updateInstallBar() {
+  $('installBar').hidden = !deferredInstall || installDismissed || isInstalled();
+}
+window.addEventListener('pdfnote:installready', () => {
+  deferredInstall = window.__deferredInstall;
+  updateInstallBar();
+});
+window.addEventListener('appinstalled', () => {
+  deferredInstall = null;
+  updateInstallBar();
+  showToast('ホーム画面に追加しました');
+});
+$('installBtn').addEventListener('click', async () => {
+  const e = deferredInstall;
+  if (!e) return;
+  deferredInstall = null; // 追加ダイアログは1回しか開けないので、使ったら手放す
+  updateInstallBar();
+  try { e.prompt(); await e.userChoice; } catch (_) {}
+});
+$('installClose').addEventListener('click', () => {
+  installDismissed = true;
+  try { localStorage.setItem('pdfnote_install_dismissed', '1'); } catch (_) {}
+  updateInstallBar(); // localStorageが使えなくても、この画面では消えたままにする
+});
+updateInstallBar();
 
 /* ---- 管理者モードの切り替え(タイトルを長押し) ---- */
 function applyMasterUI() {

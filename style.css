@@ -175,6 +175,25 @@ body.editing { touch-action: pan-x pan-y; }
 
 .app-version { opacity: .7; font-size: 11px; }
 
+/* ホーム画面への追加の案内(追加できる環境でのみ表示) */
+.install-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; background: #e8f0fe;
+  border-bottom: 1px solid #c6dafc;
+}
+.install-bar[hidden] { display: none; }
+.install-text { flex: 1; font-size: 13px; color: #174ea6; }
+.install-btn {
+  border: none; border-radius: 16px; cursor: pointer;
+  background: var(--primary); color: #fff;
+  font-size: 13px; font-weight: 600; padding: 7px 16px;
+  white-space: nowrap;
+}
+.install-close {
+  border: none; background: transparent; cursor: pointer;
+  color: #5f6368; font-size: 15px; padding: 4px 6px; line-height: 1;
+}
+
 /* 管理者モード(この端末だけ他の人の書き込みも消せる) */
 .master-badge {
   font-size: 11px; font-weight: 600; white-space: nowrap;
