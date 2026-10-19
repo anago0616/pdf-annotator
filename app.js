@@ -2,7 +2,7 @@
 
 // アプリの版。ホーム画面に表示して、端末が最新版に更新されているか確認できるようにする。
 // (sw.js の CACHE と必ず揃えること)
-const APP_VERSION = 'v61';
+const APP_VERSION = 'v62';
 
 // このデバイス固有ID。自分が作成した注釈にのみ付与し、他端末の注釈は編集不可にする
 const MY_ID = (() => {
@@ -1222,7 +1222,7 @@ $('backBtn').addEventListener('click', () => backToHome());
 
 /* ================= 書き出し・共有 ================= */
 async function exportAnnotatedPdf(doc) {
-  const { PDFDocument } = PDFLib;
+  const { PDFDocument, degrees } = PDFLib;
   const pdfDoc = await PDFDocument.load(doc.pdfData);
   const pages = pdfDoc.getPages();
 
@@ -1232,17 +1232,31 @@ async function exportAnnotatedPdf(doc) {
     if (!ann || (ann.strokes.length === 0 && ann.texts.length === 0)) continue;
 
     const page = pages[i];
-    const { width: pw, height: ph } = page.getSize();
+    // 注釈は「画面に表示されている向き・範囲」の座標で保存されている。
+    // ページ自体に回転やクロップ枠が設定されていると用紙の座標とはずれるので、合わせ込む。
+    // (これを見ていなかったため、回転付きのPDFで書き込みが別の場所に印刷されていた)
+    const box = page.getCropBox();
+    const rot = ((page.getRotation().angle % 360) + 360) % 360;
+    const turned = rot === 90 || rot === 270;
+    const vw = turned ? box.height : box.width;  // 画面で見えている幅
+    const vh = turned ? box.width : box.height;  // 画面で見えている高さ
+
     const EXPORT_SCALE = 2;
     const canvas = document.createElement('canvas');
-    canvas.width = Math.floor(pw * EXPORT_SCALE);
-    canvas.height = Math.floor(ph * EXPORT_SCALE);
+    canvas.width = Math.floor(vw * EXPORT_SCALE);
+    canvas.height = Math.floor(vh * EXPORT_SCALE);
     drawAnnotations(canvas.getContext('2d'), ann, EXPORT_SCALE);
 
     const pngBytes = await new Promise(res =>
       canvas.toBlob(b => b.arrayBuffer().then(res), 'image/png'));
     const png = await pdfDoc.embedPng(pngBytes);
-    page.drawImage(png, { x: 0, y: 0, width: pw, height: ph });
+    // ページの回転を打ち消す向き・位置で重ねる
+    const pos =
+      rot === 90  ? { x: box.x + box.width, y: box.y,              rotate: degrees(90) } :
+      rot === 180 ? { x: box.x + box.width, y: box.y + box.height, rotate: degrees(180) } :
+      rot === 270 ? { x: box.x,             y: box.y + box.height, rotate: degrees(270) } :
+                    { x: box.x,             y: box.y,              rotate: degrees(0) };
+    page.drawImage(png, { ...pos, width: vw, height: vh });
   }
   return pdfDoc.save();
 }
