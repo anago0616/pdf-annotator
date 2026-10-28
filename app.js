@@ -2,7 +2,7 @@
 
 // アプリの版。ホーム画面に表示して、端末が最新版に更新されているか確認できるようにする。
 // (sw.js の CACHE と必ず揃えること)
-const APP_VERSION = 'v62';
+const APP_VERSION = 'v63';
 
 // このデバイス固有ID。自分が作成した注釈にのみ付与し、他端末の注釈は編集不可にする
 const MY_ID = (() => {
@@ -536,6 +536,12 @@ async function renderAllPages() {
     canvas.style.width = vp.width + 'px';
     canvas.style.height = vp.height + 'px';
 
+    // 画面に映っている範囲だけを高精細に描き直す層(拡大時のぼやけ対策)
+    const detail = document.createElement('canvas');
+    detail.className = 'detail';
+    detail.hidden = true;
+    detail.width = 0; detail.height = 0; // 初期値(300x150)を持たせない
+
     const overlay = document.createElement('canvas');
     overlay.className = 'overlay';
     overlay.style.width = canvas.style.width;
@@ -545,14 +551,16 @@ async function renderAllPages() {
     label.className = 'page-num';
     label.textContent = `${num} / ${state.pdf.numPages}`;
 
-    wrap.append(canvas, overlay, label);
+    wrap.append(canvas, detail, overlay, label); // 注釈(overlay)が一番上に来る順番
     inner.appendChild(wrap);
 
     // 入力ハンドラは PDF ラスタライズを待たずに先に有効化(即書き込み可)
     const info = {
-      wrap, canvas, overlay, num, scale, dpr, pageW: vp1.width, pageH: vp1.height,
+      wrap, canvas, detail, overlay, num, scale, dpr, pageW: vp1.width, pageH: vp1.height,
       bw: Math.floor(vp.width * dpr), bh: Math.floor(vp.height * dpr),
-      painted: false, task: null, paintToken: 0, gen
+      pageCssW: vp.width, pageCssH: vp.height,
+      painted: false, task: null, paintToken: 0, gen,
+      detailOn: false, detailTask: null, detailToken: 0
     };
     state.pages.push(info);
     attachPointerHandlers(info);
@@ -607,6 +615,78 @@ function releasePage(info) {
   if (info.task) { try { info.task.cancel(); } catch (_) {} info.task = null; }
   info.canvas.width = 0; info.canvas.height = 0;   // メモリを解放
   info.overlay.width = 0; info.overlay.height = 0;
+  hideDetail(info);
+}
+
+/* ---- 拡大時のぼやけ対策: 見えている範囲だけ高精細に描き直す ----
+ * ページ全体を高解像度で持つと倍率に比例してメモリが増えてしまうため、
+ * 全体は控えめな解像度のままにして、画面に映っている部分だけを別の層に細かく描いて重ねる。
+ * 画面の広さは倍率によらず一定なので、この層が使うメモリも一定に収まる。
+ */
+function hideDetail(info) {
+  if (info.detailTask) { try { info.detailTask.cancel(); } catch (_) {} info.detailTask = null; }
+  info.detailToken++;
+  if (!info.detailOn) return;
+  info.detailOn = false;
+  info.detail.hidden = true;
+  info.detail.width = 0; info.detail.height = 0;
+}
+
+async function updateDetail(info) {
+  if (!info.painted || state.pinching) return;
+  const baseDpr = window.devicePixelRatio || 1;
+  // ページ全体が既に画面の精細さで描けているなら、重ねる必要はない
+  if (info.dpr >= baseDpr * 0.99) return hideDetail(info);
+
+  const container = $('pageContainer');
+  const cr = container.getBoundingClientRect();
+  const wr = info.wrap.getBoundingClientRect();
+  // ページの中で今見えている範囲(ページ左上からのCSS座標)
+  const vl = Math.max(0, cr.left - wr.left), vt = Math.max(0, cr.top - wr.top);
+  const vr = Math.min(wr.width, cr.right - wr.left), vb = Math.min(wr.height, cr.bottom - wr.top);
+  if (vr - vl < 1 || vb - vt < 1) return hideDetail(info); // 画面に入っていない
+
+  // 既に用意済みの範囲に収まっていれば描き直さない
+  if (info.detailOn && vl >= info.dx && vt >= info.dy &&
+      vr <= info.dx + info.dw && vb <= info.dy + info.dh) return;
+
+  // 少し広めに用意して、スクロールのたびに描き直さないようにする
+  const mx = cr.width * 0.3, my = cr.height * 0.3;
+  const x = Math.max(0, vl - mx), y = Math.max(0, vt - my);
+  const w = Math.min(wr.width, vr + mx) - x, h = Math.min(wr.height, vb + my) - y;
+
+  const MAX_DETAIL_PIXELS = 6000000, MAX_DIM = 8192; // この層の上限(約24MB)
+  const ddpr = Math.min(baseDpr * 1.15, Math.sqrt(MAX_DETAIL_PIXELS / (w * h)), MAX_DIM / w, MAX_DIM / h);
+  if (ddpr <= info.dpr * 1.05) return hideDetail(info); // 今より細かくならないなら意味がない
+
+  const token = ++info.detailToken;
+  if (info.detailTask) { try { info.detailTask.cancel(); } catch (_) {} info.detailTask = null; }
+
+  const d = info.detail;
+  d.style.left = x + 'px'; d.style.top = y + 'px';
+  d.style.width = w + 'px'; d.style.height = h + 'px';
+  d.width = Math.floor(w * ddpr); d.height = Math.floor(h * ddpr);
+  info.dx = x; info.dy = y; info.dw = w; info.dh = h;
+  info.detailDpr = ddpr;
+  info.detailOn = true;
+  d.hidden = false;
+
+  try {
+    const page = await state.pdf.getPage(info.num);
+    if (info.detailToken !== token || !info.painted || info.gen !== state.renderGen) return;
+    const task = page.render({
+      canvasContext: d.getContext('2d'),
+      viewport: page.getViewport({ scale: info.scale, offsetX: -x, offsetY: -y }),
+      transform: [ddpr, 0, 0, ddpr, 0, 0],
+      background: 'rgba(0,0,0,0)' // 塗りつぶさない。描き終わるまでは下の全体描画が透けて見える
+    });
+    info.detailTask = task;
+    await task.promise;
+  } catch (err) {
+    if (err && err.name !== 'RenderingCancelledException') console.error('高精細描画エラー p' + info.num, err);
+  } finally {
+    if (info.detailToken === token) info.detailTask = null;
+  }
 }
 
 function updateVisiblePages() {
@@ -615,8 +695,12 @@ function updateVisiblePages() {
   const top = container.scrollTop, h = container.clientHeight;
   const margin = h * 0.35; // 少し先まで用意しておく
   for (const info of state.pages) {
-    if (info.bottom >= top - margin && info.top <= top + h + margin) paintPage(info);
-    else releasePage(info);
+    if (info.bottom >= top - margin && info.top <= top + h + margin) {
+      paintPage(info);
+      updateDetail(info); // 見えている部分を高精細に
+    } else {
+      releasePage(info);
+    }
   }
 }
 

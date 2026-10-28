@@ -318,6 +318,9 @@ body.editing { touch-action: pan-x pan-y; }
   width: fit-content;
 }
 .page-wrap canvas { display: block; }
+.page-wrap canvas[hidden] { display: none; }
+/* 拡大時に、見えている範囲だけを高精細に描いて重ねる層 */
+.page-wrap .detail { position: absolute; pointer-events: none; }
 .page-wrap .overlay {
   position: absolute; inset: 0;
   touch-action: none;
