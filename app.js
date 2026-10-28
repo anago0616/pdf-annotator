@@ -2,7 +2,7 @@
 
 // アプリの版。ホーム画面に表示して、端末が最新版に更新されているか確認できるようにする。
 // (sw.js の CACHE と必ず揃えること)
-const APP_VERSION = 'v64';
+const APP_VERSION = 'v65';
 
 // このデバイス固有ID。自分が作成した注釈にのみ付与し、他端末の注釈は編集不可にする
 const MY_ID = (() => {
@@ -533,6 +533,7 @@ async function renderAllPages() {
     wrap.className = 'page-wrap';
     // 実体(バッファ)は画面に入ったときだけ確保する。CSSサイズは常に入れて配置を確定させる。
     const canvas = document.createElement('canvas');
+    canvas.width = 0; canvas.height = 0; // 初期値(300x150)を持たせない
     canvas.style.width = vp.width + 'px';
     canvas.style.height = vp.height + 'px';
 
@@ -544,6 +545,7 @@ async function renderAllPages() {
 
     const overlay = document.createElement('canvas');
     overlay.className = 'overlay';
+    overlay.width = 0; overlay.height = 0; // 初期値(300x150)を持たせない
     overlay.style.width = canvas.style.width;
     overlay.style.height = canvas.style.height;
 
