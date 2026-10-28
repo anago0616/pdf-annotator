@@ -2,7 +2,7 @@
 
 // アプリの版。ホーム画面に表示して、端末が最新版に更新されているか確認できるようにする。
 // (sw.js の CACHE と必ず揃えること)
-const APP_VERSION = 'v65';
+const APP_VERSION = 'v66';
 
 // このデバイス固有ID。自分が作成した注釈にのみ付与し、他端末の注釈は編集不可にする
 const MY_ID = (() => {
@@ -506,9 +506,10 @@ async function renderAllPages() {
   // 高解像度のまま端末の上限を超えないようにする(超えるとブラウザが内部縮小してぼやける)
   // iOS Safari は概ね面積1677万px・1辺8192pxが上限
   const MAX_AREA = 16777216, MAX_DIM = 8192, OVERSAMPLE = 1.15;
-  // 1ページあたりの描画メモリ上限(約32MB)。これが無いと高倍率でページ数が多い文書を開いたとき
+  // ページ全体の描画メモリ上限(約16MB)。これが無いと高倍率でページ数が多い文書を開いたとき
   // 端末のメモリを使い切ってブラウザがページを破棄→再読み込みしてしまう。
-  const PAGE_PIXEL_CAP = 8000000;
+  // 実際に見ている範囲は別の高精細層が描くので、ここは控えめで足りる。
+  const PAGE_PIXEL_CAP = 4000000;
   const availW = container.clientWidth - 16;
 
   for (let num = 1; num <= state.pdf.numPages; num++) {
