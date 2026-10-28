@@ -2,7 +2,7 @@
 
 // アプリの版。ホーム画面に表示して、端末が最新版に更新されているか確認できるようにする。
 // (sw.js の CACHE と必ず揃えること)
-const APP_VERSION = 'v63';
+const APP_VERSION = 'v64';
 
 // このデバイス固有ID。自分が作成した注釈にのみ付与し、他端末の注釈は編集不可にする
 const MY_ID = (() => {
@@ -1145,7 +1145,9 @@ window.addEventListener('resize', () => {
 });
 
 /* ---- ズーム ---- */
-const ZOOM_MIN = 0.5, ZOOM_MAX = 16; // 最大16倍(高倍率は端末上限内に自動調整)
+// 最大64倍。高倍率でも「見えている範囲だけ高精細に描く層」が効くので、
+// 倍率を上げても精細さは保たれ、メモリ使用量も増えない。
+const ZOOM_MIN = 0.5, ZOOM_MAX = 64;
 $('zoomInBtn').addEventListener('click', () => changeZoom(1.25));
 $('zoomOutBtn').addEventListener('click', () => changeZoom(0.8));
 
