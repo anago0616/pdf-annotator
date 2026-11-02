@@ -2,7 +2,7 @@
 
 // アプリの版。ホーム画面に表示して、端末が最新版に更新されているか確認できるようにする。
 // (sw.js の CACHE と必ず揃えること)
-const APP_VERSION = 'v70';
+const APP_VERSION = 'v71';
 
 // このデバイス固有ID。自分が作成した注釈にのみ付与し、他端末の注釈は編集不可にする
 const MY_ID = (() => {
@@ -2131,7 +2131,11 @@ function renderFileJumpList(query) {
     list.appendChild(item);
   }
 }
-$('fileJumpBtn').addEventListener('click', openFileJump);
+$('fileJumpBtn').addEventListener('click', () => {
+  const dlg = $('fileJumpDialog');
+  if (dlg.hidden) openFileJump();
+  else dlg.hidden = true; // もう一度押したら閉じる
+});
 $('fileJumpCancel').addEventListener('click', () => { $('fileJumpDialog').hidden = true; });
 $('fileJumpDialog').addEventListener('click', (e) => {
   if (e.target === $('fileJumpDialog')) $('fileJumpDialog').hidden = true; // 外側を押したら閉じる

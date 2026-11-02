@@ -195,7 +195,24 @@ body.editing { touch-action: pan-x pan-y; }
 }
 .doc-folder { font-size: 12px; color: var(--text-sub); margin-top: 2px; }
 
-/* ファイルを開いたまま別のファイルを探す一覧 */
+/* ファイルを開いたまま別のファイルを探すパネル。
+   PDFを隠さないよう、中央ではなく右端に寄せ、背景も暗くしない。 */
+#fileJumpDialog {
+  background: transparent;
+  justify-content: flex-end;
+  align-items: stretch;
+}
+#fileJumpDialog .share-dialog-box {
+  width: min(88vw, 320px);
+  height: 100%; max-height: 100%;
+  border-radius: 0;
+  padding: 14px;
+  box-shadow: -6px 0 20px rgba(0,0,0,.25);
+  border-left: 1px solid var(--border);
+  display: flex; flex-direction: column;
+}
+#fileJumpDialog h3 { margin: 0 0 10px; }
+#fileJumpList { max-height: none; flex: 1; }
 #fileJumpList .folder-picker-item { display: block; }
 .fj-folder { font-size: 12px; color: var(--text-sub); margin-top: 2px; }
 
