@@ -338,6 +338,32 @@ body.editing { touch-action: pan-x pan-y; }
 .share-push-btn:disabled { opacity: .6; cursor: default; }
 .share-push-desc { margin: 0 0 14px; font-size: 12px; }
 
+/* 文書内の文字・数字を検索するバー */
+.search-bar {
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 10px; background: #fff;
+  border-bottom: 1px solid #d7dbe2;
+}
+.search-bar[hidden] { display: none; }
+.search-input {
+  flex: 1; min-width: 0;
+  font-size: 15px; padding: 7px 10px;
+  border: 1px solid #c6cbd4; border-radius: 8px;
+  background: #fff; color: var(--text);
+}
+.search-input::-webkit-search-cancel-button { display: none; }
+.search-count {
+  font-size: 12px; color: var(--text-sub);
+  white-space: nowrap; min-width: 54px; text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.search-nav {
+  border: none; background: #eef1f6; color: #3c4043;
+  border-radius: 8px; cursor: pointer;
+  font-size: 13px; padding: 8px 10px; line-height: 1;
+}
+.search-nav:active { background: #dfe4ec; }
+
 .page-container {
   flex: 1; overflow: auto;
   padding: 12px 8px 16px;
