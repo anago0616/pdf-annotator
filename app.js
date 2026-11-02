@@ -2,7 +2,7 @@
 
 // アプリの版。ホーム画面に表示して、端末が最新版に更新されているか確認できるようにする。
 // (sw.js の CACHE と必ず揃えること)
-const APP_VERSION = 'v68';
+const APP_VERSION = 'v69';
 
 // このデバイス固有ID。自分が作成した注釈にのみ付与し、他端末の注釈は編集不可にする
 const MY_ID = (() => {
@@ -117,6 +117,7 @@ function getGuestName() {
 /* ================= ホーム画面 ================= */
 let selectMode = false;          // 一括選択モード
 const selectedIds = new Set();   // 選択中の文書ID
+let fileQuery = '';              // ファイル名の検索語(空なら通常のフォルダ表示)
 
 // 複数文書をまとめて削除(共有中なら相手の端末からも削除)
 async function deleteDocs(docs) {
@@ -148,6 +149,21 @@ async function renderHome() {
   const list = $('docList');
   list.innerHTML = '';
   $('emptyState').hidden = docs.length > 0;
+
+  // ファイル名で検索中は、フォルダ分けせずに該当ファイルだけを並べる
+  const q = fileQuery.trim().toLowerCase();
+  $('fileSearchClear').hidden = !q;
+  if (q) {
+    const hits = docs.filter(d => String(d.name || '').toLowerCase().includes(q));
+    const info = $('fileSearchInfo');
+    info.hidden = false;
+    info.textContent = hits.length ? `${hits.length}件見つかりました` : '見つかりませんでした';
+    $('emptyState').hidden = true;
+    for (const d of hits) renderDocCard(d, list, docs, true);
+    applySyncUI();
+    return;
+  }
+  $('fileSearchInfo').hidden = true;
 
   const groups = new Map();
   for (const d of docs) {
@@ -301,7 +317,7 @@ function renderFolderTree(node, depth, list, collapsed, allDocs) {
   for (const child of sortedChildren) renderFolderTree(child, depth + 1, list, collapsed, allDocs);
 }
 
-function renderDocCard(d, list, allDocs) {
+function renderDocCard(d, list, allDocs, showFolder) {
   const card = document.createElement('div');
   card.className = 'doc-card';
   if (selectMode && selectedIds.has(d.id)) card.classList.add('selected');
@@ -309,6 +325,7 @@ function renderDocCard(d, list, allDocs) {
     ${selectMode ? `<div class="doc-check">${selectedIds.has(d.id) ? '✓' : ''}</div>` : '<div class="doc-icon">📄</div>'}
     <div class="doc-info">
       <div class="doc-name"></div>
+      ${showFolder ? '<div class="doc-folder"></div>' : ''}
       <div class="doc-meta">${d.pageCount}ページ ・ ${new Date(d.updatedAt).toLocaleString('ja-JP')}</div>
     </div>
     <div class="doc-actions">
@@ -318,6 +335,7 @@ function renderDocCard(d, list, allDocs) {
       <button class="icon-btn act-delete" title="削除">🗑️</button>
     </div>`;
   card.querySelector('.doc-name').textContent = d.name;
+  if (showFolder) card.querySelector('.doc-folder').textContent = '📁 ' + (d.category || '未分類');
   if (selectMode) {
     const toggle = () => {
       if (selectedIds.has(d.id)) selectedIds.delete(d.id); else selectedIds.add(d.id);
@@ -2073,6 +2091,28 @@ function toggleMaster() {
 applyMasterUI();
 
 /* ---- 一括選択・削除 ---- */
+/* ---- ファイル名の検索 ---- */
+let fileSearchTimer = null;
+$('fileSearch').addEventListener('input', (e) => {
+  const v = e.target.value;
+  clearTimeout(fileSearchTimer);
+  fileSearchTimer = setTimeout(() => { fileQuery = v; renderHome(); }, 200);
+});
+$('fileSearch').addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  clearTimeout(fileSearchTimer);
+  fileQuery = e.target.value;
+  e.target.blur(); // スマホのキーボードを閉じて一覧を見やすくする
+  renderHome();
+});
+$('fileSearchClear').addEventListener('click', () => {
+  clearTimeout(fileSearchTimer);
+  fileQuery = '';
+  $('fileSearch').value = '';
+  renderHome();
+});
+
 $('selectBtn').addEventListener('click', () => {
   selectMode = !selectMode;
   selectedIds.clear();

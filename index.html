@@ -74,6 +74,13 @@
     </div>
     <p class="subtitle">PDFに書き込み・共有できるノートアプリ <span id="appVersion" class="app-version"></span></p>
   </header>
+
+  <!-- ファイル名で絞り込む -->
+  <div class="file-search">
+    <input id="fileSearch" class="file-search-input" type="search" placeholder="🔍 ファイル名で検索" enterkeyhint="search">
+    <button id="fileSearchClear" class="file-search-clear" title="検索をやめる" hidden>✕</button>
+  </div>
+  <p id="fileSearchInfo" class="file-search-info" hidden></p>
   <div id="installBar" class="install-bar" hidden>
     <span class="install-text">📲 ホーム画面に追加すると、アプリとして開けます</span>
     <button id="installBtn" class="install-btn">追加する</button>

@@ -175,6 +175,26 @@ body.editing { touch-action: pan-x pan-y; }
 
 .app-version { opacity: .7; font-size: 11px; }
 
+/* ファイル名の検索 */
+.file-search { position: relative; padding: 10px 12px 6px; }
+.file-search-input {
+  width: 100%; box-sizing: border-box;
+  font-size: 15px; padding: 10px 36px 10px 12px;
+  border: 1px solid #c6cbd4; border-radius: 10px;
+  background: #fff; color: var(--text);
+}
+.file-search-input::-webkit-search-cancel-button { display: none; }
+.file-search-clear {
+  position: absolute; right: 18px; top: 50%; transform: translateY(-20%);
+  border: none; background: transparent; cursor: pointer;
+  color: #5f6368; font-size: 15px; padding: 6px; line-height: 1;
+}
+.file-search-info {
+  margin: 0; padding: 0 14px 6px;
+  font-size: 12px; color: var(--text-sub);
+}
+.doc-folder { font-size: 12px; color: var(--text-sub); margin-top: 2px; }
+
 /* ホーム画面への追加の案内(追加できる環境でのみ表示) */
 .install-bar {
   display: flex; align-items: center; gap: 8px;
