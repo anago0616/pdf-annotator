@@ -111,6 +111,7 @@
     <span id="shareState" class="share-state" hidden></span>
     <span id="masterState" class="master-badge" hidden title="管理者モード: 他の人の書き込みも消せます">🔑</span>
     <span id="saveStatus" class="save-status"></span>
+    <button id="fileJumpBtn" class="icon-btn" title="他のファイルを探して開く">🔍</button>
     <button id="liveBtn" class="icon-btn" title="共同編集">🔗</button>
     <button id="printBtn" class="icon-btn" title="印刷">🖨️</button>
     <button id="shareBtn" class="icon-btn" title="PDFを書き出して共有">📤</button>
@@ -175,6 +176,18 @@
 </div>
 
 <!-- フォルダ選択ダイアログ -->
+<!-- ファイルを開いたまま、別のファイルを探して開く -->
+<div id="fileJumpDialog" class="share-dialog" hidden>
+  <div class="share-dialog-box folder-picker-box">
+    <h3>🔍 ファイルを開く</h3>
+    <input id="fileJumpInput" class="dialog-input" type="search" placeholder="ファイル名で検索" enterkeyhint="search">
+    <div id="fileJumpList" class="folder-picker-list"></div>
+    <div class="text-editor-actions">
+      <button id="fileJumpCancel">閉じる</button>
+    </div>
+  </div>
+</div>
+
 <div id="folderPickerDialog" class="share-dialog" hidden>
   <div class="share-dialog-box folder-picker-box">
     <h3 id="folderPickerTitle">📁 移動先フォルダ</h3>

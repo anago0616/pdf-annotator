@@ -2,7 +2,7 @@
 
 // アプリの版。ホーム画面に表示して、端末が最新版に更新されているか確認できるようにする。
 // (sw.js の CACHE と必ず揃えること)
-const APP_VERSION = 'v69';
+const APP_VERSION = 'v70';
 
 // このデバイス固有ID。自分が作成した注釈にのみ付与し、他端末の注釈は編集不可にする
 const MY_ID = (() => {
@@ -2091,6 +2091,60 @@ function toggleMaster() {
 applyMasterUI();
 
 /* ---- 一括選択・削除 ---- */
+/* ---- ファイルを開いたまま別のファイルを探して開く ---- */
+let fileJumpDocs = [];
+async function openFileJump() {
+  fileJumpDocs = (await dbAll()).sort((a, b) =>
+    String(a.name || '').localeCompare(String(b.name || ''), 'ja', { numeric: true }));
+  $('fileJumpInput').value = '';
+  renderFileJumpList('');
+  $('fileJumpDialog').hidden = false;
+  $('fileJumpInput').focus();
+}
+function renderFileJumpList(query) {
+  const list = $('fileJumpList');
+  list.innerHTML = '';
+  const q = query.trim().toLowerCase();
+  const hits = q ? fileJumpDocs.filter(d => String(d.name || '').toLowerCase().includes(q)) : fileJumpDocs;
+  if (!hits.length) {
+    const empty = document.createElement('div');
+    empty.className = 'folder-picker-item current';
+    empty.textContent = '見つかりませんでした';
+    list.appendChild(empty);
+    return;
+  }
+  for (const d of hits) {
+    const item = document.createElement('div');
+    item.className = 'folder-picker-item';
+    if (state.doc && d.id === state.doc.id) item.classList.add('current');
+    const name = document.createElement('div');
+    name.textContent = d.name;
+    const folder = document.createElement('div');
+    folder.className = 'fj-folder';
+    folder.textContent = '📁 ' + (d.category || '未分類') +
+      (state.doc && d.id === state.doc.id ? '（表示中）' : '');
+    item.append(name, folder);
+    item.addEventListener('click', () => {
+      $('fileJumpDialog').hidden = true;
+      openEditor(d.id);
+    });
+    list.appendChild(item);
+  }
+}
+$('fileJumpBtn').addEventListener('click', openFileJump);
+$('fileJumpCancel').addEventListener('click', () => { $('fileJumpDialog').hidden = true; });
+$('fileJumpDialog').addEventListener('click', (e) => {
+  if (e.target === $('fileJumpDialog')) $('fileJumpDialog').hidden = true; // 外側を押したら閉じる
+});
+$('fileJumpInput').addEventListener('input', (e) => renderFileJumpList(e.target.value));
+$('fileJumpInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { $('fileJumpDialog').hidden = true; return; }
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  const first = $('fileJumpList').querySelector('.folder-picker-item:not(.current)');
+  if (first) first.click(); // 1件目を開く
+});
+
 /* ---- ファイル名の検索 ---- */
 let fileSearchTimer = null;
 $('fileSearch').addEventListener('input', (e) => {

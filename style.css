@@ -195,6 +195,10 @@ body.editing { touch-action: pan-x pan-y; }
 }
 .doc-folder { font-size: 12px; color: var(--text-sub); margin-top: 2px; }
 
+/* ファイルを開いたまま別のファイルを探す一覧 */
+#fileJumpList .folder-picker-item { display: block; }
+.fj-folder { font-size: 12px; color: var(--text-sub); margin-top: 2px; }
+
 /* ホーム画面への追加の案内(追加できる環境でのみ表示) */
 .install-bar {
   display: flex; align-items: center; gap: 8px;
