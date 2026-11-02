@@ -2,7 +2,7 @@
 
 // アプリの版。ホーム画面に表示して、端末が最新版に更新されているか確認できるようにする。
 // (sw.js の CACHE と必ず揃えること)
-const APP_VERSION = 'v72';
+const APP_VERSION = 'v73';
 
 // このデバイス固有ID。自分が作成した注釈にのみ付与し、他端末の注釈は編集不可にする
 const MY_ID = (() => {
@@ -1118,6 +1118,50 @@ async function getPageText(num) {
   return entry;
 }
 
+/* ---- 表の「行」を組み立てる ----
+ * 表形式のPDFでは、同じ行のセルはほぼ同じ高さに並ぶ。
+ * y座標が近いものをまとめて1行とみなし、複数語の絞り込み(同じ行に全部あるか)に使う。
+ */
+function getPageRows(num) {
+  const entry = docSearch.textCache.get(num);
+  if (entry.rows) return entry.rows;
+  const sorted = [...entry.parts].sort((a, b) => a.y - b.y || a.x - b.x);
+  const rows = [];
+  for (const p of sorted) {
+    const last = rows[rows.length - 1];
+    if (last && Math.abs(p.y - last.y) <= Math.max(2, p.h * 0.6)) last.items.push(p);
+    else rows.push({ y: p.y, items: [p] });
+  }
+  for (const r of rows) {
+    r.items.sort((a, b) => a.x - b.x);
+    // 行の文字列と、文字位置→セルの対応表を作る
+    let t = '';
+    const map = [];
+    for (const p of r.items) {
+      const s = entry.text.slice(p.start, p.end);
+      map.push({ start: t.length, end: t.length + s.length, p });
+      t += s + ' '; // セルの区切り(隣のセルと語がつながらないように)
+    }
+    r.text = t; r.lower = t.toLowerCase(); r.map = map;
+  }
+  entry.rows = rows;
+  return rows;
+}
+
+// 行の文字列中の位置を、ページ上の四角に変換する
+function rowRangeToRects(map, start, end) {
+  const rects = [];
+  for (const m of map) {
+    if (m.end <= start || m.start >= end) continue;
+    const len = m.end - m.start;
+    if (len <= 0) continue;
+    const a = Math.max(start, m.start) - m.start;
+    const b = Math.min(end, m.end) - m.start;
+    rects.push({ x: m.p.x + m.p.w * (a / len), y: m.p.y, w: m.p.w * ((b - a) / len), h: m.p.h });
+  }
+  return rects;
+}
+
 // 文字列中の位置(start..end)を、ページ上の四角(複数になることもある)に変換する
 function rangeToRects(parts, start, end) {
   const rects = [];
@@ -1141,19 +1185,40 @@ async function runDocSearch(query) {
   if (docSearch.running) return;
   docSearch.running = true;
   updateDocSearchUI();
-  const needle = query.toLowerCase();
+  // 空白で区切ると複数語の絞り込み(同じ行に全部そろう箇所を探す)
+  const terms = query.toLowerCase().split(/[\s　]+/).filter(Boolean);
+  docSearch.multi = terms.length > 1;
   let hasAnyText = false;
   try {
     for (let num = 1; num <= state.pdf.numPages; num++) {
       const { text, parts } = await getPageText(num);
       if (text.trim()) hasAnyText = true;
-      const hay = text.toLowerCase();
-      let from = 0, at;
-      while ((at = hay.indexOf(needle, from)) !== -1) {
-        const rects = rangeToRects(parts, at, at + needle.length);
-        if (rects.length) docSearch.hits.push({ page: num, rects });
-        from = at + needle.length;
-        if (docSearch.hits.length > 2000) break; // 多すぎる場合は打ち切る
+
+      if (docSearch.multi) {
+        // 同じ行に指定した語がすべて含まれる行を探し、その行の語すべてに色を付ける
+        for (const row of getPageRows(num)) {
+          if (!terms.every(t => row.lower.includes(t))) continue;
+          const rects = [];
+          for (const t of terms) {
+            let from = 0, at;
+            while ((at = row.lower.indexOf(t, from)) !== -1) {
+              rects.push(...rowRangeToRects(row.map, at, at + t.length));
+              from = at + t.length;
+            }
+          }
+          if (rects.length) docSearch.hits.push({ page: num, rects });
+          if (docSearch.hits.length > 2000) break;
+        }
+      } else {
+        const needle = terms[0];
+        const hay = text.toLowerCase();
+        let from = 0, at;
+        while ((at = hay.indexOf(needle, from)) !== -1) {
+          const rects = rangeToRects(parts, at, at + needle.length);
+          if (rects.length) docSearch.hits.push({ page: num, rects });
+          from = at + needle.length;
+          if (docSearch.hits.length > 2000) break; // 多すぎる場合は打ち切る
+        }
       }
       if (docSearch.hits.length > 2000) break;
     }
@@ -1207,7 +1272,9 @@ function updateDocSearchUI() {
   if (!docSearch.query) { el.textContent = ''; return; }
   if (docSearch.running) { el.textContent = '検索中…'; return; }
   if (docSearch.noText) { el.textContent = '文字情報なし'; return; }
-  el.textContent = docSearch.hits.length ? `${docSearch.index + 1} / ${docSearch.hits.length}` : '0 件';
+  if (!docSearch.hits.length) { el.textContent = '0 件'; return; }
+  // 複数語のときは「行」単位で数えていることが分かるようにする
+  el.textContent = `${docSearch.index + 1} / ${docSearch.hits.length}` + (docSearch.multi ? ' 行' : '');
 }
 
 // 検索の状態だけを初期化する(描き直しはしない)
