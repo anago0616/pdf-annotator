@@ -2,7 +2,7 @@
 
 // アプリの版。ホーム画面に表示して、端末が最新版に更新されているか確認できるようにする。
 // (sw.js の CACHE と必ず揃えること)
-const APP_VERSION = 'v66';
+const APP_VERSION = 'v67';
 
 // このデバイス固有ID。自分が作成した注釈にのみ付与し、他端末の注釈は編集不可にする
 const MY_ID = (() => {
@@ -448,6 +448,8 @@ async function openEditor(id) {
   updateTextToolbar();
   // ライブラリ同期は常時接続なので個別接続はしない。状態表示のみ更新。
   applySyncUI();
+  search.textCache.clear(); // 別の文書の文字情報を持ち越さない
+  resetSearch();
   state.pdf = await pdfjsLib.getDocument({ data: doc.pdfData.slice(0) }).promise;
   await renderAllPages();
   if (saved) { // 前回見ていた位置へ戻す
@@ -771,6 +773,7 @@ function redrawOverlay(info) {
   ctx.clearRect(0, 0, info.overlay.width, info.overlay.height);
   const ann = pageAnn(state.doc, info.num);
   const factor = info.scale * info.dpr;
+  drawSearchHits(ctx, info, factor); // 検索結果は書き込みの下に敷く
   drawAnnotations(ctx, ann, factor);
   // 選択中テキストの枠+リサイズハンドル
   const sel = state.selectedText;
@@ -1067,6 +1070,161 @@ $('ttDelete').addEventListener('click', () => {
   scheduleSave();
   sendPageSet(sel.page);
   updateTextToolbar();
+});
+
+/* ================= 文書内の検索 =================
+ * PDFに埋め込まれている文字を探して、該当箇所に色を付けて飛べるようにする。
+ * スキャンしただけのPDF(画像のみ)には文字情報が無いので、その場合はその旨を伝える。
+ */
+const search = { query: '', hits: [], index: -1, textCache: new Map(), running: false };
+
+// 1ページ分の文字を、注釈と同じ座標系(倍率1のビューア座標)で取り出す
+async function getPageText(num) {
+  if (search.textCache.has(num)) return search.textCache.get(num);
+  const page = await state.pdf.getPage(num);
+  const vp = page.getViewport({ scale: 1 });
+  const tc = await page.getTextContent();
+  let text = '';
+  const parts = []; // {start, end, x, y, w, h}
+  for (const item of tc.items) {
+    const s = item.str;
+    if (!s) continue;
+    const m = pdfjsLib.Util.transform(vp.transform, item.transform);
+    const h = Math.hypot(m[2], m[3]) || item.height || 10;
+    const w = item.width || 0;
+    parts.push({ start: text.length, end: text.length + s.length, x: m[4], y: m[5] - h, w, h });
+    text += s;
+    if (item.hasEOL) text += '\n';
+  }
+  const entry = { text, parts };
+  search.textCache.set(num, entry);
+  return entry;
+}
+
+// 文字列中の位置(start..end)を、ページ上の四角(複数になることもある)に変換する
+function rangeToRects(parts, start, end) {
+  const rects = [];
+  for (const p of parts) {
+    if (p.end <= start || p.start >= end) continue;
+    const len = p.end - p.start;
+    if (len <= 0) continue;
+    const a = Math.max(start, p.start) - p.start;
+    const b = Math.min(end, p.end) - p.start;
+    rects.push({ x: p.x + p.w * (a / len), y: p.y, w: p.w * ((b - a) / len), h: p.h });
+  }
+  return rects;
+}
+
+async function runSearch(query) {
+  search.query = query;
+  search.hits = [];
+  search.index = -1;
+  if (!query || !state.pdf) { updateSearchUI(); renderHits(); return; }
+  if (search.running) return;
+  search.running = true;
+  const needle = query.toLowerCase();
+  let hasAnyText = false;
+  try {
+    for (let num = 1; num <= state.pdf.numPages; num++) {
+      const { text, parts } = await getPageText(num);
+      if (text.trim()) hasAnyText = true;
+      const hay = text.toLowerCase();
+      let from = 0, at;
+      while ((at = hay.indexOf(needle, from)) !== -1) {
+        const rects = rangeToRects(parts, at, at + needle.length);
+        if (rects.length) search.hits.push({ page: num, rects });
+        from = at + needle.length;
+        if (search.hits.length > 2000) break; // 多すぎる場合は打ち切る
+      }
+      if (search.hits.length > 2000) break;
+      if (num % 5 === 0) updateSearchUI(); // 進み具合を見せる
+    }
+  } finally {
+    search.running = false;
+  }
+  search.noText = !hasAnyText;
+  updateSearchUI();
+  renderHits();
+  if (search.hits.length) gotoHit(0);
+}
+
+function drawSearchHits(ctx, info, factor) {
+  if (!search.hits.length) return;
+  const cur = search.hits[search.index];
+  for (let i = 0; i < search.hits.length; i++) {
+    const hit = search.hits[i];
+    if (hit.page !== info.num) continue;
+    ctx.save();
+    ctx.fillStyle = (hit === cur) ? 'rgba(255,145,0,.55)' : 'rgba(255,230,0,.38)';
+    for (const r of hit.rects) ctx.fillRect(r.x * factor, r.y * factor, r.w * factor, r.h * factor);
+    ctx.restore();
+  }
+}
+
+function renderHits() {
+  for (const info of state.pages) redrawOverlay(info);
+}
+
+async function gotoHit(i) {
+  if (!search.hits.length) return;
+  const n = search.hits.length;
+  search.index = ((i % n) + n) % n;
+  const hit = search.hits[search.index];
+  const info = state.pages.find(p => p.num === hit.page);
+  if (info) {
+    const c = $('pageContainer');
+    const r = hit.rects[0];
+    // 該当箇所が画面の中ほどに来るようにスクロール
+    c.scrollTop = Math.max(0, info.top + r.y * info.scale - c.clientHeight / 2);
+    const left = r.x * info.scale - c.clientWidth / 2;
+    if (c.scrollWidth > c.clientWidth) c.scrollLeft = Math.max(0, left);
+    updateVisiblePages();
+  }
+  updateSearchUI();
+  renderHits();
+}
+
+function updateSearchUI() {
+  const el = $('searchCount');
+  if (!search.query) { el.textContent = ''; return; }
+  if (search.running) { el.textContent = '検索中…'; return; }
+  if (search.noText && !search.hits.length) { el.textContent = '文字情報なし'; return; }
+  el.textContent = search.hits.length ? `${search.index + 1} / ${search.hits.length}` : '0 件';
+}
+
+// 検索の状態だけを初期化する(描き直しはしない)
+function resetSearch() {
+  $('searchBar').hidden = true;
+  $('searchInput').value = '';
+  search.query = ''; search.hits = []; search.index = -1; search.noText = false;
+  updateSearchUI();
+}
+function closeSearch() {
+  resetSearch();
+  renderHits();
+}
+
+$('searchBtn').addEventListener('click', () => {
+  const bar = $('searchBar');
+  if (bar.hidden) { bar.hidden = false; $('searchInput').focus(); }
+  else closeSearch();
+});
+$('searchClose').addEventListener('click', closeSearch);
+$('searchPrev').addEventListener('click', () => gotoHit(search.index - 1));
+$('searchNext').addEventListener('click', () => gotoHit(search.index + 1));
+let searchTimer = null;
+$('searchInput').addEventListener('input', (e) => {
+  clearTimeout(searchTimer);
+  const v = e.target.value;
+  searchTimer = setTimeout(() => runSearch(v.trim()), 300);
+});
+$('searchInput').addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  clearTimeout(searchTimer);
+  const v = $('searchInput').value.trim();
+  if (v !== search.query) runSearch(v);
+  else if (search.hits.length) gotoHit(search.index + (e.shiftKey ? -1 : 1));
 });
 
 /* ---- 元に戻す ---- */
@@ -2120,7 +2278,7 @@ if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.
 
 
 /* テスト用フック */
-window.__app = { importPdf, openEditor, renderHome, state, dbAll, exportAnnotatedPdf, shareFolder, joinFolder, unshareFolder, conns, canEditAnn, toggleMaster, get master() { return MASTER; } };
+window.__app = { importPdf, openEditor, renderHome, state, dbAll, exportAnnotatedPdf, shareFolder, joinFolder, unshareFolder, conns, canEditAnn, toggleMaster, get master() { return MASTER; }, search, runSearch, gotoHit };
 
 /* ================= 起動 ================= */
 function hideSplash() {
