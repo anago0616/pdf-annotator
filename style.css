@@ -162,9 +162,20 @@ body.editing { touch-action: pan-x pan-y; }
   background: var(--card); border-bottom: 1px solid var(--border);
   z-index: 5;
 }
+.editor-title-row {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: 6px;
+}
 .doc-title {
-  flex: 1; font-size: 14px; font-weight: 600;
+  flex: 1; min-width: 0; font-size: 14px; font-weight: 600;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* 画面が狭いとボタンに押されてファイル名が「4..」のように潰れてしまうため、
+   ファイル名だけ2段目に回して横幅をすべて使えるようにする */
+@media (max-width: 600px) {
+  .editor-header { flex-wrap: wrap; }
+  .editor-header #backBtn { margin-right: auto; } /* ボタン類は右寄せ */
+  .editor-title-row { order: 10; flex-basis: 100%; }
 }
 .save-status { font-size: 11px; color: var(--text-sub); white-space: nowrap; }
 .share-state {

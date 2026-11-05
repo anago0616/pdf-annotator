@@ -107,10 +107,12 @@
 <div id="editorView" class="view" hidden>
   <header class="editor-header">
     <button id="backBtn" class="icon-btn" title="戻る">←</button>
-    <span id="docTitle" class="doc-title"></span>
-    <span id="shareState" class="share-state" hidden></span>
-    <span id="masterState" class="master-badge" hidden title="管理者モード: 他の人の書き込みも消せます">🔑</span>
-    <span id="saveStatus" class="save-status"></span>
+    <div class="editor-title-row">
+      <span id="docTitle" class="doc-title"></span>
+      <span id="shareState" class="share-state" hidden></span>
+      <span id="masterState" class="master-badge" hidden title="管理者モード: 他の人の書き込みも消せます">🔑</span>
+      <span id="saveStatus" class="save-status"></span>
+    </div>
     <button id="docSearchBtn" class="icon-btn" title="この文書内の文字を検索">🔍</button>
     <button id="fileJumpBtn" class="icon-btn" title="他のファイルを探して開く">📂</button>
     <button id="liveBtn" class="icon-btn" title="共同編集">🔗</button>
